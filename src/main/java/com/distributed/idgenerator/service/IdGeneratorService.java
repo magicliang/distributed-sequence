@@ -1038,7 +1038,7 @@ public class IdGeneratorService {
                 
                 if (stepSizeChanged) {
                     // 步长发生变化，需要重新计算下一个区间
-                    long nextMaxValue = calculateNextIntervalMaxValue(segment.getMaxValue(), 
+                    long nextMaxValue = calculateNextIntervalMaxValue(businessType, timeKey,
                             segment.getStepSize(), newStepSize, shardType);
                     updateCount = idSegmentRepository.updateMaxValueAndStepSizeAtomicallyWithValue(
                             businessType, timeKey, shardType, nextMaxValue, newStepSize);
@@ -1046,7 +1046,7 @@ public class IdGeneratorService {
                             buildSegmentKey(businessType, timeKey), segment.getStepSize(), newStepSize, nextMaxValue);
                 } else {
                     // 步长未变化，计算下一个区间
-                    long nextMaxValue = calculateNextIntervalMaxValue(segment.getMaxValue(), 
+                    long nextMaxValue = calculateNextIntervalMaxValue(businessType, timeKey,
                             newStepSize, newStepSize, shardType);
                     updateCount = idSegmentRepository.updateMaxValueAtomicallyWithValue(
                             businessType, timeKey, shardType, nextMaxValue);
@@ -1089,30 +1089,66 @@ public class IdGeneratorService {
     
     /**
      * 计算下一个区间的最大值
-     * 奇偶区间错开模式：跳跃到下一个属于当前分片类型的区间
+     * 奇偶区间错开模式：基于全局最大值计算下一个属于当前分片类型的区间
      * 
-     * @param currentMaxValue 当前最大值
+     * @param businessType 业务类型
+     * @param timeKey 时间键
      * @param currentStepSize 当前步长
      * @param newStepSize 新步长
      * @param shardType 分片类型
      * @return 下一个区间的最大值
      */
-    private long calculateNextIntervalMaxValue(long currentMaxValue, int currentStepSize, 
-                                               int newStepSize, int shardType) {
-        // 计算当前是第几个区间
-        long currentIntervalIndex = (currentMaxValue - 1) / currentStepSize;
+    private long calculateNextIntervalMaxValue(String businessType, String timeKey,
+                                               int currentStepSize, int newStepSize, int shardType) {
+        // 获取全局最大值（两个分片类型中的最大值）
+        long globalMaxValue = getGlobalMaxValue(businessType, timeKey, newStepSize);
         
-        // 跳跃到下一个属于当前分片类型的区间
-        long nextIntervalIndex;
-        if (shardType == 1) {
-            // 奇数服务器：0, 2, 4, 6, ... (偶数索引)
-            nextIntervalIndex = ((currentIntervalIndex / 2) + 1) * 2;
-        } else {
-            // 偶数服务器：1, 3, 5, 7, ... (奇数索引)
-            nextIntervalIndex = ((currentIntervalIndex / 2) + 1) * 2 + 1;
-        }
+        // 基于全局最大值计算当前全局区间索引
+        long globalIntervalIndex = (globalMaxValue - 1) / newStepSize;
+        
+        // 找到下一个属于当前分片类型的区间索引
+        long nextIntervalIndex = findNextAvailableIntervalIndex(globalIntervalIndex, shardType);
         
         return (nextIntervalIndex + 1) * newStepSize;
+    }
+    
+    /**
+     * 获取全局最大值（考虑两个分片类型）
+     */
+    private long getGlobalMaxValue(String businessType, String timeKey, int stepSize) {
+        // 查询两个分片类型的最大值
+        Optional<Long> evenMaxValue = idSegmentRepository.getCurrentMaxValue(businessType, timeKey, 0);
+        Optional<Long> oddMaxValue = idSegmentRepository.getCurrentMaxValue(businessType, timeKey, 1);
+        
+        long maxEven = evenMaxValue.orElse(0L);
+        long maxOdd = oddMaxValue.orElse(0L);
+        
+        // 返回全局最大值，如果都为0则返回初始步长
+        long globalMax = Math.max(maxEven, maxOdd);
+        return globalMax == 0 ? stepSize : globalMax;
+    }
+    
+    /**
+     * 找到下一个可用的区间索引
+     */
+    private long findNextAvailableIntervalIndex(long currentGlobalIndex, int shardType) {
+        // 从当前全局索引开始，找到下一个属于指定分片类型的区间
+        long candidateIndex = currentGlobalIndex + 1;
+        
+        while (true) {
+            if (shardType == 1) {
+                // 奇数服务器：使用偶数索引区间 (0, 2, 4, 6, ...)
+                if (candidateIndex % 2 == 0) {
+                    return candidateIndex;
+                }
+            } else {
+                // 偶数服务器：使用奇数索引区间 (1, 3, 5, 7, ...)
+                if (candidateIndex % 2 == 1) {
+                    return candidateIndex;
+                }
+            }
+            candidateIndex++;
+        }
     }
 
     /**
