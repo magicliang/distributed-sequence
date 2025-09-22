@@ -237,4 +237,81 @@ public class IdGeneratorController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
         }
     }
+    
+    // ==================== 步长同步管理接口 ====================
+    
+    /**
+     * 强制所有服务器使用相同的新步长
+     * 这是一个强制同步操作，会更新数据库中所有相关号段的步长，并清理所有服务器的内存缓存
+     * 
+     * @param businessType 业务类型（可选，不指定则更新所有业务类型）
+     * @param newStepSize 新的步长值
+     * @param preview 是否仅预览影响范围（不实际执行变更）
+     * @return 强制同步结果
+     */
+    @PostMapping("/admin/step-size/force-sync")
+    public ResponseEntity<Map<String, Object>> forceGlobalStepSizeSync(
+            @RequestParam(required = false) String businessType,
+            @RequestParam Integer newStepSize,
+            @RequestParam(defaultValue = "false") Boolean preview) {
+        
+        try {
+            Map<String, Object> result = idGeneratorService.forceGlobalStepSizeSync(
+                    businessType, newStepSize, preview);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("强制步长同步失败", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "强制步长同步失败: " + e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+    
+    /**
+     * 检查步长一致性
+     * 检查指定业务类型下所有分片是否使用相同的步长
+     * 
+     * @param businessType 业务类型
+     * @return 一致性检查结果
+     */
+    @GetMapping("/admin/step-size/consistency-check")
+    public ResponseEntity<Map<String, Object>> checkStepSizeConsistency(
+            @RequestParam String businessType) {
+        
+        try {
+            Map<String, Object> result = idGeneratorService.checkStepSizeConsistency(businessType);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("检查步长一致性失败", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "检查步长一致性失败: " + e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+    
+    /**
+     * 获取全局步长一致性报告
+     * 检查所有业务类型的步长一致性状况
+     * 
+     * @return 全局步长一致性报告
+     */
+    @GetMapping("/admin/step-size/global-consistency-report")
+    public ResponseEntity<Map<String, Object>> getGlobalStepSizeConsistencyReport() {
+        
+        try {
+            Map<String, Object> result = idGeneratorService.getGlobalStepSizeConsistencyReport();
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            log.error("获取全局步长一致性报告失败", e);
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "获取全局步长一致性报告失败: " + e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
 }

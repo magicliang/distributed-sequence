@@ -1629,4 +1629,198 @@ public class IdGeneratorService {
         
         return result;
     }
+    
+    // ==================== 步长同步功能 ====================
+    
+    /**
+     * 强制所有服务器使用相同的新步长
+     * 这个方法会更新数据库中所有相关号段的步长，并清理所有服务器的内存缓存
+     * 
+     * @param businessType 业务类型（如果为null则更新所有业务类型）
+     * @param newStepSize 新的步长
+     * @param preview 是否为预览模式
+     * @return 操作结果
+     */
+    @Transactional
+    public Map<String, Object> forceGlobalStepSizeSync(String businessType, Integer newStepSize, Boolean preview) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            // 参数验证
+            if (newStepSize == null || newStepSize <= 0) {
+                throw new IllegalArgumentException("步长必须大于0");
+            }
+            
+            int updatedCount = 0;
+            
+            if (!preview) {
+                if (businessType != null && !businessType.trim().isEmpty()) {
+                    // 更新指定业务类型的所有号段
+                    updatedCount = idSegmentRepository.updateStepSizeForAllShards(businessType, newStepSize);
+                    log.info("强制同步步长：业务类型 {} 的所有号段步长已更新为 {}", businessType, newStepSize);
+                } else {
+                    // 更新所有号段
+                    updatedCount = idSegmentRepository.updateStepSizeForAllSegments(newStepSize);
+                    log.info("强制同步步长：所有号段步长已更新为 {}", newStepSize);
+                }
+                
+                // 清理所有内存缓存，强制重新加载
+                int originalCacheSize = segmentBuffers.size();
+                segmentBuffers.clear();
+                
+                log.info("强制清理所有内存缓存，清理了 {} 个segment缓存", originalCacheSize);
+                
+                result.put("cacheCleared", originalCacheSize);
+            } else {
+                // 预览模式：计算将要影响的号段数量
+                if (businessType != null && !businessType.trim().isEmpty()) {
+                    List<IdSegment> segments = idSegmentRepository.findByBusinessType(businessType);
+                    updatedCount = segments.size();
+                } else {
+                    updatedCount = (int) idSegmentRepository.count();
+                }
+            }
+            
+            result.put("success", true);
+            result.put("preview", preview);
+            result.put("businessType", businessType);
+            result.put("newStepSize", newStepSize);
+            result.put("updatedCount", updatedCount);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (preview) {
+                result.put("message", String.format("预览：将强制同步 %d 个号段的步长为 %d", updatedCount, newStepSize));
+            } else {
+                result.put("message", String.format("强制同步完成：已更新 %d 个号段的步长为 %d，并清理了所有内存缓存", updatedCount, newStepSize));
+            }
+            
+        } catch (Exception e) {
+            log.error("强制步长同步失败", e);
+            result.put("success", false);
+            result.put("message", "强制步长同步失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 检查步长一致性
+     * 检查指定业务类型下所有分片是否使用相同的步长
+     * 
+     * @param businessType 业务类型
+     * @return 一致性检查结果
+     */
+    public Map<String, Object> checkStepSizeConsistency(String businessType) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            if (businessType == null || businessType.trim().isEmpty()) {
+                throw new IllegalArgumentException("业务类型不能为空");
+            }
+            
+            // 获取所有分片的步长信息
+            List<Object[]> stepSizeInfo = idSegmentRepository.getStepSizesByBusinessType(businessType);
+            
+            // 统计不同步长的数量
+            Long distinctStepSizeCount = idSegmentRepository.countDistinctStepSizesByBusinessType(businessType);
+            
+            boolean isConsistent = distinctStepSizeCount <= 1;
+            
+            // 构建详细信息
+            List<Map<String, Object>> shardDetails = new ArrayList<>();
+            Map<Integer, Integer> stepSizeMap = new HashMap<>();
+            
+            for (Object[] info : stepSizeInfo) {
+                Integer shardType = (Integer) info[0];
+                Integer stepSize = (Integer) info[1];
+                
+                Map<String, Object> shardDetail = new HashMap<>();
+                shardDetail.put("shardType", shardType);
+                shardDetail.put("stepSize", stepSize);
+                shardDetails.add(shardDetail);
+                
+                stepSizeMap.put(shardType, stepSize);
+            }
+            
+            result.put("success", true);
+            result.put("businessType", businessType);
+            result.put("isConsistent", isConsistent);
+            result.put("distinctStepSizeCount", distinctStepSizeCount);
+            result.put("totalShards", stepSizeInfo.size());
+            result.put("shardDetails", shardDetails);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (isConsistent) {
+                if (stepSizeInfo.isEmpty()) {
+                    result.put("message", "该业务类型下暂无号段数据");
+                } else {
+                    Integer commonStepSize = (Integer) stepSizeInfo.get(0)[1];
+                    result.put("commonStepSize", commonStepSize);
+                    result.put("message", String.format("步长一致：所有 %d 个分片都使用步长 %d", stepSizeInfo.size(), commonStepSize));
+                }
+            } else {
+                result.put("message", String.format("步长不一致：%d 个分片使用了 %d 种不同的步长", stepSizeInfo.size(), distinctStepSizeCount));
+            }
+            
+        } catch (Exception e) {
+            log.error("检查步长一致性失败", e);
+            result.put("success", false);
+            result.put("message", "检查失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 获取所有业务类型的步长一致性报告
+     * 
+     * @return 全局步长一致性报告
+     */
+    public Map<String, Object> getGlobalStepSizeConsistencyReport() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            List<String> businessTypes = idSegmentRepository.findAllDistinctBusinessTypes();
+            List<Map<String, Object>> businessReports = new ArrayList<>();
+            
+            int totalBusinessTypes = businessTypes.size();
+            int consistentBusinessTypes = 0;
+            int inconsistentBusinessTypes = 0;
+            
+            for (String businessType : businessTypes) {
+                Map<String, Object> businessReport = checkStepSizeConsistency(businessType);
+                businessReports.add(businessReport);
+                
+                if ((Boolean) businessReport.get("isConsistent")) {
+                    consistentBusinessTypes++;
+                } else {
+                    inconsistentBusinessTypes++;
+                }
+            }
+            
+            result.put("success", true);
+            result.put("totalBusinessTypes", totalBusinessTypes);
+            result.put("consistentBusinessTypes", consistentBusinessTypes);
+            result.put("inconsistentBusinessTypes", inconsistentBusinessTypes);
+            result.put("businessReports", businessReports);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (inconsistentBusinessTypes == 0) {
+                result.put("message", String.format("全局步长一致：所有 %d 个业务类型的步长都是一致的", totalBusinessTypes));
+            } else {
+                result.put("message", String.format("发现步长不一致：%d 个业务类型中有 %d 个存在步长不一致问题", 
+                        totalBusinessTypes, inconsistentBusinessTypes));
+            }
+            
+        } catch (Exception e) {
+            log.error("获取全局步长一致性报告失败", e);
+            result.put("success", false);
+            result.put("message", "获取报告失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
 }

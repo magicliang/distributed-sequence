@@ -57,7 +57,10 @@ public class IntervalConflictTest {
         int stepSize = 1000;
 
         // 清理测试数据
-        idSegmentRepository.deleteByBusinessTypeAndTimeKey(businessType, timeKey);
+        List<IdSegment> existingSegments = idSegmentRepository.findByBusinessTypeAndTimeKey(businessType, timeKey);
+        if (!existingSegments.isEmpty()) {
+            idSegmentRepository.deleteAll(existingSegments);
+        }
 
         // 模拟场景：偶数服务器已经跑到很前面
         // 偶数服务器使用区间1: [1001, 2000], 区间3: [3001, 4000], 区间5: [5001, 6000]
@@ -105,7 +108,10 @@ public class IntervalConflictTest {
         int stepSize = 1000;
 
         // 清理测试数据
-        idSegmentRepository.deleteByBusinessTypeAndTimeKey(businessType, timeKey);
+        List<IdSegment> existingSegments = idSegmentRepository.findByBusinessTypeAndTimeKey(businessType, timeKey);
+        if (!existingSegments.isEmpty()) {
+            idSegmentRepository.deleteAll(existingSegments);
+        }
 
         // 只有偶数分片有数据
         IdSegment evenSegment = new IdSegment();
@@ -143,7 +149,10 @@ public class IntervalConflictTest {
         int stepSize = 1000;
 
         // 清理测试数据
-        idSegmentRepository.deleteByBusinessTypeAndTimeKey(businessType, timeKey);
+        List<IdSegment> existingSegments = idSegmentRepository.findByBusinessTypeAndTimeKey(businessType, timeKey);
+        if (!existingSegments.isEmpty()) {
+            idSegmentRepository.deleteAll(existingSegments);
+        }
 
         // 模拟交替分配场景
         long[] expectedOddIntervals = {1000L, 3000L, 5000L, 7000L}; // 区间0,2,4,6
@@ -198,7 +207,10 @@ public class IntervalConflictTest {
         int newStepSize = 2000;
 
         // 清理测试数据
-        idSegmentRepository.deleteByBusinessTypeAndTimeKey(businessType, timeKey);
+        List<IdSegment> existingSegments = idSegmentRepository.findByBusinessTypeAndTimeKey(businessType, timeKey);
+        if (!existingSegments.isEmpty()) {
+            idSegmentRepository.deleteAll(existingSegments);
+        }
 
         // 设置初始状态：两个分片都有一些进度
         IdSegment oddSegment = new IdSegment();

@@ -139,4 +139,44 @@ public interface IdSegmentRepository extends JpaRepository<IdSegment, Long> {
      */
     @Query("SELECT COALESCE(SUM(s.maxValue), 0) FROM IdSegment s WHERE s.shardType = :shardType")
     Long getTotalMaxValueByShardType(@Param("shardType") Integer shardType);
+    
+    /**
+     * 根据业务类型和时间键删除号段（测试用）
+     */
+    @Modifying
+    @Transactional
+    void deleteByBusinessTypeAndTimeKey(String businessType, String timeKey);
+    
+    /**
+     * 批量更新指定业务类型的所有号段的步长
+     * 用于强制所有服务器使用相同的新步长
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE IdSegment s SET s.stepSize = :newStepSize, s.updatedTime = CURRENT_TIMESTAMP " +
+           "WHERE s.businessType = :businessType")
+    int updateStepSizeForAllShards(@Param("businessType") String businessType,
+                                  @Param("newStepSize") Integer newStepSize);
+    
+    /**
+     * 批量更新所有号段的步长（全局步长同步）
+     * 用于强制所有服务器使用相同的新步长
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE IdSegment s SET s.stepSize = :newStepSize, s.updatedTime = CURRENT_TIMESTAMP")
+    int updateStepSizeForAllSegments(@Param("newStepSize") Integer newStepSize);
+    
+    /**
+     * 获取指定业务类型下所有分片的步长信息
+     * 用于检查步长一致性
+     */
+    @Query("SELECT s.shardType, s.stepSize FROM IdSegment s WHERE s.businessType = :businessType")
+    List<Object[]> getStepSizesByBusinessType(@Param("businessType") String businessType);
+    
+    /**
+     * 检查指定业务类型下是否所有分片都使用相同步长
+     */
+    @Query("SELECT COUNT(DISTINCT s.stepSize) FROM IdSegment s WHERE s.businessType = :businessType")
+    Long countDistinctStepSizesByBusinessType(@Param("businessType") String businessType);
 }
