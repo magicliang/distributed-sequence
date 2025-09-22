@@ -9,6 +9,7 @@ import com.distributed.idgenerator.repository.ServerRegistryRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -476,7 +477,8 @@ public class IdGeneratorService {
     }
 
     /**
-     * 确定分片类型
+     * 智能确定分片类型
+     * 实现动态负载均衡和容错切换机制
      */
     private int determineShardType(IdRequest request) {
         // 如果强制指定分片类型
@@ -484,34 +486,104 @@ public class IdGeneratorService {
             return request.getForceShardType();
         }
         
-        // 正常情况下使用当前服务器的分片类型
-        int targetShardType = serverType;
-        int oppositeShardType = 1 - serverType;
+        String businessType = request.getBusinessType();
+        String timeKey = request.getEffectiveTimeKey();
         
-        // 检查对方服务器是否在线
-        List<ServerRegistry> oppositeServers = serverRegistryRepository
-                .findByServerTypeAndStatus(oppositeShardType, 1);
+        // 检查两种分片类型的服务器状态
+        boolean evenServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(0, 1).isEmpty();
+        boolean oddServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(1, 1).isEmpty();
         
-        if (oppositeServers.isEmpty()) {
-            // 对方服务器下线，当前服务器需要代理全部分片
-            log.warn("对方服务器下线，当前服务器代理全部分片");
+        if (evenServerOnline && oddServerOnline) {
+            // 双方都在线，使用智能负载均衡策略
+            return selectBalancedShardType(businessType, timeKey);
+        } else if (evenServerOnline || oddServerOnline) {
+            // 有一方下线，当前服务器接管全部分片
+            int offlineType = evenServerOnline ? 1 : 0;
+            log.warn("{}服务器下线，当前服务器接管全部分片", offlineType == 0 ? "偶数" : "奇数");
             
-            // 根据业务类型和时间键的哈希值来决定使用哪个分片
-            // 这样可以保证请求的分布相对均匀
-            String hashKey = request.getBusinessType() + "_" + request.getEffectiveTimeKey();
-            int hashValue = Math.abs(hashKey.hashCode());
-            
-            // 使用哈希值的奇偶性来决定分片类型，保证负载均衡
-            int calculatedShardType = hashValue % 2;
-            
-            log.debug("容错模式：业务类型={}, 时间键={}, 计算分片类型={}", 
-                    request.getBusinessType(), request.getEffectiveTimeKey(), calculatedShardType);
-            
-            return calculatedShardType;
+            // 使用动态选择策略，优先使用负载较轻的分片
+            return selectAnyAvailableShardType(businessType, timeKey);
+        } else {
+            // 异常情况，使用当前服务器类型
+            log.warn("无法检测到其他在线服务器，使用当前服务器类型: {}", serverType);
+            return serverType;
         }
+    }
+    
+    /**
+     * 选择负载均衡的分片类型
+     * 双方服务器都在线时使用
+     */
+    private int selectBalancedShardType(String businessType, String timeKey) {
+        // 查询当前两种分片类型的使用情况
+        Optional<IdSegment> evenSegment = idSegmentRepository.findByBusinessTypeAndTimeKeyAndShardType(businessType, timeKey, 0);
+        Optional<IdSegment> oddSegment = idSegmentRepository.findByBusinessTypeAndTimeKeyAndShardType(businessType, timeKey, 1);
         
-        // 对方服务器在线，使用当前服务器的分片类型
-        return targetShardType;
+        // 如果都不存在，根据当前服务器类型和负载情况选择
+        if (!evenSegment.isPresent() && !oddSegment.isPresent()) {
+            // 检查全局负载情况
+            long evenServerLoad = getServerTypeLoad(0);
+            long oddServerLoad = getServerTypeLoad(1);
+            
+            // 选择负载较轻的服务器类型
+            if (evenServerLoad <= oddServerLoad) {
+                return 0;
+            } else {
+                return 1;
+            }
+        } else if (!evenSegment.isPresent()) {
+            return 0; // 偶数分片未使用，优先使用
+        } else if (!oddSegment.isPresent()) {
+            return 1; // 奇数分片未使用，优先使用
+        } else {
+            // 都存在，比较使用情况选择负载较轻的
+            long evenUsage = evenSegment.get().getMaxValue();
+            long oddUsage = oddSegment.get().getMaxValue();
+            
+            // 考虑步长差异，计算实际使用率
+            double evenUsageRate = (double) evenUsage / evenSegment.get().getStepSize();
+            double oddUsageRate = (double) oddUsage / oddSegment.get().getStepSize();
+            
+            return evenUsageRate <= oddUsageRate ? 0 : 1;
+        }
+    }
+    
+    /**
+     * 选择任意可用的分片类型
+     * 容错模式下使用，可以使用任意分片类型
+     */
+    private int selectAnyAvailableShardType(String businessType, String timeKey) {
+        // 查询两种分片类型的使用情况
+        Optional<IdSegment> evenSegment = idSegmentRepository.findByBusinessTypeAndTimeKeyAndShardType(businessType, timeKey, 0);
+        Optional<IdSegment> oddSegment = idSegmentRepository.findByBusinessTypeAndTimeKeyAndShardType(businessType, timeKey, 1);
+        
+        // 优先选择已存在且使用率较低的分片
+        if (evenSegment.isPresent() && oddSegment.isPresent()) {
+            // 比较使用情况
+            long evenUsage = evenSegment.get().getMaxValue();
+            long oddUsage = oddSegment.get().getMaxValue();
+            return evenUsage <= oddUsage ? 0 : 1;
+        } else if (evenSegment.isPresent()) {
+            return 0;
+        } else if (oddSegment.isPresent()) {
+            return 1;
+        } else {
+            // 都不存在，使用哈希分布确保均匀性
+            String hashKey = businessType + "_" + timeKey;
+            return Math.abs(hashKey.hashCode()) % 2;
+        }
+    }
+    
+    /**
+     * 获取指定服务器类型的负载情况
+     */
+    private long getServerTypeLoad(int serverType) {
+        try {
+            return idSegmentRepository.getTotalMaxValueByShardType(serverType);
+        } catch (Exception e) {
+            log.warn("获取服务器类型{}负载失败: {}", serverType, e.getMessage());
+            return 0;
+        }
     }
 
     /**
@@ -520,16 +592,181 @@ public class IdGeneratorService {
      * @return true表示处于容错模式，需要代理全部分片；false表示正常模式
      */
     private boolean isInFailoverMode() {
-        int oppositeShardType = 1 - serverType;
-        List<ServerRegistry> oppositeServers = serverRegistryRepository
-                .findByServerTypeAndStatus(oppositeShardType, 1);
+        boolean evenServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(0, 1).isEmpty();
+        boolean oddServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(1, 1).isEmpty();
         
-        boolean failoverMode = oppositeServers.isEmpty();
+        // 只有一种类型的服务器在线时，就是容错模式
+        boolean failoverMode = !(evenServerOnline && oddServerOnline);
+        
         if (failoverMode) {
-            log.debug("当前处于容错模式，代理全部分片");
+            String onlineType = evenServerOnline ? "偶数" : (oddServerOnline ? "奇数" : "无");
+            log.debug("当前处于容错模式，在线服务器类型: {}", onlineType);
         }
         
         return failoverMode;
+    }
+    
+    /**
+     * 服务器故障转移处理
+     * 定期检查并处理服务器切换
+     */
+    public void handleServerFailover() {
+        boolean evenServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(0, 1).isEmpty();
+        boolean oddServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(1, 1).isEmpty();
+        
+        if (!evenServerOnline && oddServerOnline && serverType == 1) {
+            // 偶数服务器下线，奇数服务器接管
+            log.info("检测到偶数服务器下线，奇数服务器开始接管偶数分片");
+            takeOverShards(0);
+        } else if (evenServerOnline && !oddServerOnline && serverType == 0) {
+            // 奇数服务器下线，偶数服务器接管
+            log.info("检测到奇数服务器下线，偶数服务器开始接管奇数分片");
+            takeOverShards(1);
+        } else if (evenServerOnline && oddServerOnline) {
+            // 双方都恢复，清理代理状态
+            cleanupProxyShards();
+        }
+    }
+    
+    /**
+     * 接管指定类型的分片
+     */
+    private void takeOverShards(int targetShardType) {
+        try {
+            // 查找目标分片类型的所有活跃号段
+            List<IdSegment> targetSegments = idSegmentRepository.findByShardType(targetShardType);
+            
+            for (IdSegment segment : targetSegments) {
+                String segmentKey = buildSegmentKey(segment.getBusinessType(), segment.getTimeKey());
+                String proxyKey = segmentKey + "_proxy_" + targetShardType;
+                
+                // 检查是否已经代理
+                if (!segmentBuffers.containsKey(proxyKey)) {
+                    // 创建代理缓冲区
+                    long startValue = calculateIntervalStartValue(segment.getMaxValue(), segment.getStepSize(), targetShardType);
+                    SegmentBuffer proxyBuffer = new SegmentBuffer(startValue, segment.getMaxValue(), targetShardType);
+                    
+                    segmentBuffers.put(proxyKey, proxyBuffer);
+                    log.info("接管分片: {}, 类型: {}, 区间: [{}, {}]", 
+                            segmentKey, targetShardType, startValue, segment.getMaxValue());
+                }
+            }
+        } catch (Exception e) {
+            log.error("接管分片失败, 目标类型: {}", targetShardType, e);
+        }
+    }
+    
+    /**
+     * 清理代理分片
+     * 当对方服务器恢复后调用
+     */
+    private void cleanupProxyShards() {
+        try {
+            List<String> proxyKeys = segmentBuffers.keySet().stream()
+                    .filter(key -> key.contains("_proxy_"))
+                    .collect(java.util.stream.Collectors.toList());
+            
+            for (String proxyKey : proxyKeys) {
+                segmentBuffers.remove(proxyKey);
+                log.info("清理代理分片: {}", proxyKey);
+            }
+            
+            if (!proxyKeys.isEmpty()) {
+                log.info("服务器恢复，清理了 {} 个代理分片", proxyKeys.size());
+            }
+        } catch (Exception e) {
+            log.error("清理代理分片失败", e);
+        }
+    }
+    
+    /**
+     * 冲突解决机制
+     * 服务器恢复后解决可能的ID冲突
+     */
+    public Map<String, Object> resolveConflictsAfterRecovery() {
+        Map<String, Object> result = new HashMap<>();
+        List<String> resolvedSegments = new ArrayList<>();
+        int conflictCount = 0;
+        
+        try {
+            // 查找所有业务类型和时间键的组合
+            List<String> businessTypes = idSegmentRepository.findAllDistinctBusinessTypes();
+            
+            for (String businessType : businessTypes) {
+                List<IdSegment> segments = idSegmentRepository.findByBusinessType(businessType);
+                
+                // 按时间键分组
+                Map<String, List<IdSegment>> segmentsByTimeKey = segments.stream()
+                        .collect(java.util.stream.Collectors.groupingBy(IdSegment::getTimeKey));
+                
+                for (Map.Entry<String, List<IdSegment>> entry : segmentsByTimeKey.entrySet()) {
+                    String timeKey = entry.getKey();
+                    List<IdSegment> timeKeySegments = entry.getValue();
+                    
+                    // 检查是否存在冲突
+                    if (timeKeySegments.size() > 1) {
+                        boolean resolved = resolveSegmentConflict(businessType, timeKey, timeKeySegments);
+                        if (resolved) {
+                            conflictCount++;
+                            resolvedSegments.add(businessType + ":" + timeKey);
+                        }
+                    }
+                }
+            }
+            
+            result.put("success", true);
+            result.put("conflictCount", conflictCount);
+            result.put("resolvedSegments", resolvedSegments);
+            result.put("message", String.format("冲突解决完成，处理了 %d 个冲突", conflictCount));
+            
+        } catch (Exception e) {
+            log.error("冲突解决失败", e);
+            result.put("success", false);
+            result.put("message", "冲突解决失败: " + e.getMessage());
+        }
+        
+        result.put("timestamp", System.currentTimeMillis());
+        return result;
+    }
+    
+    /**
+     * 解决单个号段的冲突
+     */
+    private boolean resolveSegmentConflict(String businessType, String timeKey, List<IdSegment> segments) {
+        try {
+            // 找到最大的maxValue作为新的起点
+            long maxValue = segments.stream()
+                    .mapToLong(IdSegment::getMaxValue)
+                    .max()
+                    .orElse(0);
+            
+            // 统一步长（使用最大的步长）
+            int maxStepSize = segments.stream()
+                    .mapToInt(IdSegment::getStepSize)
+                    .max()
+                    .orElse(defaultStepSize);
+            
+            // 更新所有相关号段
+            for (IdSegment segment : segments) {
+                if (segment.getMaxValue() < maxValue || segment.getStepSize() != maxStepSize) {
+                    segment.setMaxValue(maxValue);
+                    segment.setStepSize(maxStepSize);
+                    idSegmentRepository.save(segment);
+                    
+                    // 清理对应的缓存
+                    String segmentKey = buildSegmentKey(businessType, timeKey);
+                    segmentBuffers.remove(segmentKey);
+                    
+                    log.info("解决冲突: {} 分片类型: {}, 新maxValue: {}, 新stepSize: {}", 
+                            segmentKey, segment.getShardType(), maxValue, maxStepSize);
+                }
+            }
+            
+            return true;
+        } catch (Exception e) {
+            log.error("解决号段冲突失败: {}:{}", businessType, timeKey, e);
+            return false;
+        }
     }
 
     /**
@@ -806,6 +1043,19 @@ public class IdGeneratorService {
     }
 
     /**
+     * 定时处理服务器故障转移
+     * 每30秒检查一次服务器状态
+     */
+    @Scheduled(fixedDelay = 30000)
+    public void scheduledFailoverCheck() {
+        try {
+            handleServerFailover();
+        } catch (Exception e) {
+            log.error("定时故障转移检查失败", e);
+        }
+    }
+    
+    /**
      * 获取服务器状态
      */
     public Map<String, Object> getServerStatus() {
@@ -822,12 +1072,56 @@ public class IdGeneratorService {
         
         status.put("evenServerCount", evenServerCount);
         status.put("oddServerCount", oddServerCount);
+        status.put("isInFailoverMode", isInFailoverMode());
+        
+        // 统计代理分片数量
+        long proxyShardCount = segmentBuffers.keySet().stream()
+                .filter(key -> key.contains("_proxy_"))
+                .count();
+        status.put("proxyShardCount", proxyShardCount);
         
         // 添加刷新状态监控
         Map<String, Object> refreshStatus = getRefreshStatusSummary();
         status.put("refreshStatus", refreshStatus);
         
+        // 添加负载均衡信息
+        Map<String, Object> loadBalanceInfo = getLoadBalanceInfo();
+        status.put("loadBalance", loadBalanceInfo);
+        
         return status;
+    }
+    
+    /**
+     * 获取负载均衡信息
+     */
+    private Map<String, Object> getLoadBalanceInfo() {
+        Map<String, Object> info = new HashMap<>();
+        
+        try {
+            long evenServerLoad = getServerTypeLoad(0);
+            long oddServerLoad = getServerTypeLoad(1);
+            
+            info.put("evenServerLoad", evenServerLoad);
+            info.put("oddServerLoad", oddServerLoad);
+            info.put("totalLoad", evenServerLoad + oddServerLoad);
+            
+            if (evenServerLoad + oddServerLoad > 0) {
+                double evenLoadRatio = (double) evenServerLoad / (evenServerLoad + oddServerLoad);
+                double oddLoadRatio = (double) oddServerLoad / (evenServerLoad + oddServerLoad);
+                info.put("evenLoadRatio", Math.round(evenLoadRatio * 100.0) / 100.0);
+                info.put("oddLoadRatio", Math.round(oddLoadRatio * 100.0) / 100.0);
+                info.put("isBalanced", Math.abs(evenLoadRatio - oddLoadRatio) < 0.2); // 20%以内认为是均衡的
+            } else {
+                info.put("evenLoadRatio", 0.0);
+                info.put("oddLoadRatio", 0.0);
+                info.put("isBalanced", true);
+            }
+        } catch (Exception e) {
+            log.warn("获取负载均衡信息失败", e);
+            info.put("error", e.getMessage());
+        }
+        
+        return info;
     }
     
     /**

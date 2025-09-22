@@ -132,4 +132,11 @@ public interface IdSegmentRepository extends JpaRepository<IdSegment, Long> {
                                                     @Param("shardType") Integer shardType,
                                                     @Param("maxValue") Long maxValue,
                                                     @Param("stepSize") Integer stepSize);
+    
+    /**
+     * 获取指定分片类型的总负载（所有maxValue的总和）
+     * 用于负载均衡计算
+     */
+    @Query("SELECT COALESCE(SUM(s.maxValue), 0) FROM IdSegment s WHERE s.shardType = :shardType")
+    Long getTotalMaxValueByShardType(@Param("shardType") Integer shardType);
 }
