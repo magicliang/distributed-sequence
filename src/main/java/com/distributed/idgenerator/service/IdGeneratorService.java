@@ -150,6 +150,18 @@ public class IdGeneratorService {
          */
         private final AtomicBoolean needRefresh;
         
+        /**
+         * 最后一次刷新尝试的时间戳
+         * 用于检测刷新超时和实现自动恢复机制
+         */
+        private volatile long lastRefreshAttemptTime;
+        
+        /**
+         * 刷新超时时间（毫秒）
+         * 如果刷新操作超过此时间仍未完成，允许其他线程重新尝试
+         */
+        private static final long REFRESH_TIMEOUT_MS = 10000; // 10秒
+        
 
 
         public SegmentBuffer(long startValue, long maxValue, int shardType) {
@@ -158,6 +170,7 @@ public class IdGeneratorService {
             this.maxValue = maxValue;
             this.shardType = shardType;
             this.needRefresh = new AtomicBoolean(false);
+            this.lastRefreshAttemptTime = 0;
         }
 
         public long getAndIncrement() {
@@ -212,12 +225,42 @@ public class IdGeneratorService {
         }
 
         /**
-         * 尝试设置刷新标志位
+         * 尝试设置刷新标志位（增强版）
          * 使用CAS操作确保只有一个线程能成功设置
+         * 支持超时检测：如果上次刷新尝试超时，允许新的线程重新尝试
          * @return true表示成功设置，false表示已经被其他线程设置
          */
         public boolean trySetNeedRefresh() {
-            return needRefresh.compareAndSet(false, true);
+            long currentTime = System.currentTimeMillis();
+            
+            // 首先尝试正常的CAS操作
+            if (needRefresh.compareAndSet(false, true)) {
+                lastRefreshAttemptTime = currentTime;
+                return true;
+            }
+            
+            // 如果CAS失败，检查是否是因为上次刷新超时
+            if (needRefresh.get() && isRefreshTimeout(currentTime)) {
+                // 上次刷新已超时，强制重置并重新尝试
+                log.warn("检测到刷新操作超时，强制重置刷新标志位进行恢复");
+                needRefresh.set(false);
+                
+                // 重新尝试CAS操作
+                if (needRefresh.compareAndSet(false, true)) {
+                    lastRefreshAttemptTime = currentTime;
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        /**
+         * 检查刷新操作是否超时
+         */
+        private boolean isRefreshTimeout(long currentTime) {
+            return lastRefreshAttemptTime > 0 && 
+                   (currentTime - lastRefreshAttemptTime) > REFRESH_TIMEOUT_MS;
         }
         
         /**
@@ -226,6 +269,21 @@ public class IdGeneratorService {
          */
         public void resetNeedRefresh() {
             needRefresh.set(false);
+            lastRefreshAttemptTime = 0;
+        }
+        
+        /**
+         * 获取刷新状态信息（用于监控和调试）
+         */
+        public Map<String, Object> getRefreshStatus() {
+            long currentTime = System.currentTimeMillis();
+            Map<String, Object> status = new HashMap<>();
+            status.put("needRefresh", needRefresh.get());
+            status.put("lastRefreshAttemptTime", lastRefreshAttemptTime);
+            status.put("timeSinceLastAttempt", lastRefreshAttemptTime > 0 ? 
+                      currentTime - lastRefreshAttemptTime : 0);
+            status.put("isTimeout", isRefreshTimeout(currentTime));
+            return status;
         }
 
 
@@ -547,26 +605,65 @@ public class IdGeneratorService {
 
     /**
      * 异步刷新号段
+     * 增强版：支持超时机制和更完善的异常处理
      */
     private void refreshSegmentAsync(String segmentKey, String businessType, 
                                      String timeKey, IdRequest request) {
-        // 这里可以使用线程池异步执行
-        // 为简化实现，暂时使用同步方式
         SegmentBuffer buffer = segmentBuffers.get(segmentKey);
-        if (buffer != null) {
-            try {
-                boolean success = refreshSegmentFromDB(buffer, businessType, timeKey, request);
-                if (!success) {
-                    // 刷新失败，重置标志位以便后续重试
-                    buffer.resetNeedRefresh();
-                    log.warn("异步刷新号段失败，已重置刷新标志位: {}", segmentKey);
-                }
-                // 注意：成功的情况下，refreshSegmentFromDB内部的updateRange方法会自动重置标志位
-            } catch (Exception e) {
-                // 异常情况下也要重置标志位
+        if (buffer == null) {
+            return;
+        }
+        
+        // 记录刷新开始时间，用于超时检测
+        long startTime = System.currentTimeMillis();
+        
+        try {
+            // 设置刷新超时时间（5秒）
+            long timeoutMs = 5000;
+            
+            boolean success = refreshSegmentFromDBWithTimeout(buffer, businessType, timeKey, request, timeoutMs);
+            
+            if (!success) {
+                // 刷新失败，重置标志位以便后续重试
                 buffer.resetNeedRefresh();
-                log.error("异步刷新号段异常，已重置刷新标志位: " + segmentKey, e);
+                log.warn("异步刷新号段失败，已重置刷新标志位: {}, 耗时: {}ms", 
+                        segmentKey, System.currentTimeMillis() - startTime);
+            } else {
+                log.debug("异步刷新号段成功: {}, 耗时: {}ms", 
+                        segmentKey, System.currentTimeMillis() - startTime);
             }
+            // 注意：成功的情况下，refreshSegmentFromDB内部的updateRange方法会自动重置标志位
+            
+        } catch (Exception e) {
+            // 异常情况下也要重置标志位
+            buffer.resetNeedRefresh();
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("异步刷新号段异常，已重置刷新标志位: {}, 耗时: {}ms, 错误: {}", 
+                    segmentKey, duration, e.getMessage(), e);
+        }
+    }
+    
+    /**
+     * 带超时机制的数据库刷新方法
+     */
+    private boolean refreshSegmentFromDBWithTimeout(SegmentBuffer buffer, String businessType, 
+                                                    String timeKey, IdRequest request, long timeoutMs) {
+        long startTime = System.currentTimeMillis();
+        
+        try {
+            // 检查是否已经超时
+            if (System.currentTimeMillis() - startTime > timeoutMs) {
+                log.warn("刷新号段超时: {}, 超时时间: {}ms", buildSegmentKey(businessType, timeKey), timeoutMs);
+                return false;
+            }
+            
+            // 调用原有的刷新方法
+            return refreshSegmentFromDB(buffer, businessType, timeKey, request);
+            
+        } catch (Exception e) {
+            long duration = System.currentTimeMillis() - startTime;
+            log.error("刷新号段异常: {}, 耗时: {}ms", buildSegmentKey(businessType, timeKey), duration, e);
+            return false;
         }
     }
 
@@ -726,7 +823,77 @@ public class IdGeneratorService {
         status.put("evenServerCount", evenServerCount);
         status.put("oddServerCount", oddServerCount);
         
+        // 添加刷新状态监控
+        Map<String, Object> refreshStatus = getRefreshStatusSummary();
+        status.put("refreshStatus", refreshStatus);
+        
         return status;
+    }
+    
+    /**
+     * 获取刷新状态摘要
+     * 用于监控是否有卡住的刷新操作
+     */
+    public Map<String, Object> getRefreshStatusSummary() {
+        Map<String, Object> summary = new HashMap<>();
+        int totalBuffers = 0;
+        int refreshingBuffers = 0;
+        int timeoutBuffers = 0;
+        List<Map<String, Object>> timeoutDetails = new ArrayList<>();
+        
+        for (Map.Entry<String, SegmentBuffer> entry : segmentBuffers.entrySet()) {
+            totalBuffers++;
+            SegmentBuffer buffer = entry.getValue();
+            Map<String, Object> bufferStatus = buffer.getRefreshStatus();
+            
+            if ((Boolean) bufferStatus.get("needRefresh")) {
+                refreshingBuffers++;
+                
+                if ((Boolean) bufferStatus.get("isTimeout")) {
+                    timeoutBuffers++;
+                    Map<String, Object> timeoutInfo = new HashMap<>();
+                    timeoutInfo.put("segmentKey", entry.getKey());
+                    timeoutInfo.put("timeSinceLastAttempt", bufferStatus.get("timeSinceLastAttempt"));
+                    timeoutDetails.add(timeoutInfo);
+                }
+            }
+        }
+        
+        summary.put("totalBuffers", totalBuffers);
+        summary.put("refreshingBuffers", refreshingBuffers);
+        summary.put("timeoutBuffers", timeoutBuffers);
+        summary.put("timeoutDetails", timeoutDetails);
+        summary.put("hasTimeoutIssues", timeoutBuffers > 0);
+        
+        return summary;
+    }
+    
+    /**
+     * 手动恢复超时的刷新操作
+     * 用于运维场景，可以手动清理卡住的刷新状态
+     */
+    public Map<String, Object> recoverTimeoutRefresh() {
+        Map<String, Object> result = new HashMap<>();
+        int recoveredCount = 0;
+        List<String> recoveredSegments = new ArrayList<>();
+        
+        for (Map.Entry<String, SegmentBuffer> entry : segmentBuffers.entrySet()) {
+            SegmentBuffer buffer = entry.getValue();
+            Map<String, Object> bufferStatus = buffer.getRefreshStatus();
+            
+            if ((Boolean) bufferStatus.get("needRefresh") && (Boolean) bufferStatus.get("isTimeout")) {
+                buffer.resetNeedRefresh();
+                recoveredCount++;
+                recoveredSegments.add(entry.getKey());
+                log.info("手动恢复超时的刷新操作: {}", entry.getKey());
+            }
+        }
+        
+        result.put("recoveredCount", recoveredCount);
+        result.put("recoveredSegments", recoveredSegments);
+        result.put("timestamp", System.currentTimeMillis());
+        
+        return result;
     }
 
     /**
