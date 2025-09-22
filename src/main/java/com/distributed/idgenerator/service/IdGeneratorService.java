@@ -363,6 +363,7 @@ public class IdGeneratorService {
 
         // 构建响应
         IdResponse response = IdResponse.builder()
+                .success(true)
                 .ids(ids)
                 .businessType(businessType)
                 .timeKey(timeKey)

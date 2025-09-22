@@ -20,6 +20,13 @@ import java.util.List;
 public class IdResponse {
 
     /**
+     * 操作是否成功
+     * true - 成功生成ID
+     * false - 生成失败
+     */
+    private boolean success;
+
+    /**
      * 生成的ID列表
      * 包含本次请求生成的所有ID值
      * ID按生成顺序排列，保证单调递增（考虑奇偶分片规则）
@@ -147,5 +154,12 @@ public class IdResponse {
      */
     public boolean hasRoutingInfo() {
         return routingInfo != null;
+    }
+
+    /**
+     * 检查操作是否成功
+     */
+    public boolean isSuccess() {
+        return success;
     }
 }

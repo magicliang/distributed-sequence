@@ -4,7 +4,7 @@ import com.distributed.idgenerator.dto.IdRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureTestMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
@@ -22,7 +22,7 @@ import static org.hamcrest.Matchers.*;
  * @version 1.0.0
  */
 @SpringBootTest
-@AutoConfigureTestMvc
+@AutoConfigureMockMvc
 @ActiveProfiles("h2")
 @Transactional
 class IdGeneratorControllerTest {
