@@ -52,6 +52,29 @@ java -jar target/*.jar
 
 ### 3. Docker部署
 
+#### 方式一：Docker Compose (推荐)
+
+使用 Docker Compose 可以一键启动完整的服务栈，包括应用和数据库：
+
+```bash
+# 启动完整服务栈 (应用 + MySQL)
+docker-compose up -d
+
+# 查看服务状态
+docker-compose ps
+
+# 查看日志
+docker-compose logs -f id-generator
+
+# 停止服务
+docker-compose down
+
+# 启动时包含负载均衡器
+docker-compose --profile loadbalancer up -d
+```
+
+#### 方式二：单独构建和运行
+
 ```bash
 # 构建镜像
 docker build -t id-generator:latest .
@@ -68,6 +91,18 @@ docker run -p 8080:8080 \
   -e MYSQL_USERNAME=with_ygpsfnsdmsasjvcz \
   -e MYSQL_PASSWORD="9j4srZ)\$wavpqm" \
   id-generator:latest
+```
+
+#### 方式三：多实例部署
+
+```bash
+# 启动多个实例实现高可用
+docker-compose up --scale id-generator=3 -d
+
+# 使用不同端口启动多个实例
+docker run -d -p 8080:8080 --name id-gen-1 id-generator:latest
+docker run -d -p 8081:8080 --name id-gen-2 id-generator:latest
+docker run -d -p 8082:8080 --name id-gen-3 id-generator:latest
 ```
 
 ### 4. Kubernetes部署

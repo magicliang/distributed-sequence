@@ -114,6 +114,16 @@ mvn spring-boot:run
 
 ### Docker部署
 
+#### 快速启动 (推荐)
+```bash
+# 使用 Docker Compose 一键启动
+docker-compose up -d
+
+# 访问应用
+curl http://localhost:8080/api/generate/order
+```
+
+#### 手动构建部署
 1. **构建镜像**
 ```bash
 docker build -t id-generator:latest .
@@ -129,6 +139,12 @@ docker run -d \
   -e MYSQL_USERNAME=your_username \
   -e MYSQL_PASSWORD=your_password \
   id-generator:latest
+```
+
+#### 高可用部署
+```bash
+# 启动多实例 + 负载均衡
+docker-compose --profile loadbalancer up --scale id-generator=3 -d
 ```
 
 ### Kubernetes部署

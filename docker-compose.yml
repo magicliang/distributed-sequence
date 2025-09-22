@@ -1,0 +1,70 @@
+version: '3.8'
+
+services:
+  # MySQL数据库
+  mysql:
+    image: mysql:8.0
+    container_name: id-generator-mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: czyll8wg
+      MYSQL_USER: idgen_user
+      MYSQL_PASSWORD: idgen_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - id-generator-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      timeout: 20s
+      retries: 10
+
+  # ID生成器应用
+  id-generator:
+    build: .
+    container_name: id-generator-app
+    environment:
+      SPRING_PROFILES_ACTIVE: mysql
+      MYSQL_HOST: mysql
+      MYSQL_PORT: 3306
+      MYSQL_DATABASE: czyll8wg
+      MYSQL_USERNAME: idgen_user
+      MYSQL_PASSWORD: idgen_password
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+    networks:
+      - id-generator-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 负载均衡器 (可选)
+  nginx:
+    image: nginx:alpine
+    container_name: id-generator-nginx
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf
+    depends_on:
+      - id-generator
+    networks:
+      - id-generator-network
+    profiles:
+      - loadbalancer
+
+volumes:
+  mysql_data:
+
+networks:
+  id-generator-network:
+    driver: bridge

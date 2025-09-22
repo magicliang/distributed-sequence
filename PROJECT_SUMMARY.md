@@ -77,9 +77,15 @@ distributed-id-generator/
 │   └── 系统设计文档.md                      # 详细设计文档
 ├── pom.xml                                 # Maven配置
 ├── Dockerfile                              # Docker构建文件
+├── .dockerignore                           # Docker忽略文件
+├── docker-compose.yml                      # Docker Compose配置
+├── init.sql                                # 数据库初始化脚本
+├── nginx.conf                              # Nginx负载均衡配置
 ├── k8s-deployment.yaml                     # K8s部署配置
 ├── start.sh                               # Linux启动脚本
 ├── start.bat                              # Windows启动脚本
+├── docker-start.sh                        # Docker Linux启动脚本
+├── docker-start.bat                       # Docker Windows启动脚本
 ├── DEPLOYMENT.md                          # 部署指南
 └── README.md                              # 项目说明
 ```
