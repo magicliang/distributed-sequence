@@ -30,37 +30,124 @@ import java.util.concurrent.locks.ReentrantLock;
 @Slf4j
 public class IdGeneratorService {
 
+    /**
+     * ID号段数据访问层
+     * 用于操作id_segment表，包括查询、更新号段信息
+     * 提供号段的持久化存储和原子性更新操作
+     */
     @Autowired
     private IdSegmentRepository idSegmentRepository;
 
+    /**
+     * 服务器注册信息数据访问层
+     * 用于操作server_registry表，管理服务器注册、心跳、状态等信息
+     * 支持服务发现和健康检查功能
+     */
     @Autowired
     private ServerRegistryRepository serverRegistryRepository;
 
+    /**
+     * 当前服务器类型配置
+     * 从配置文件id.generator.server.type读取，默认值为0
+     * 0 - 偶数服务器：负责处理偶数分片的ID生成
+     * 1 - 奇数服务器：负责处理奇数分片的ID生成
+     * 用于实现奇偶分片的负载均衡策略
+     */
     @Value("${id.generator.server.type:0}")
-    private Integer serverType; // 0-偶数服务器, 1-奇数服务器
+    private Integer serverType;
 
+    /**
+     * 默认号段步长配置
+     * 从配置文件id.generator.step.size读取，默认值为1000
+     * 表示每次从数据库申请号段时的增量大小
+     * 较大的步长减少数据库访问但可能浪费ID，较小的步长节约ID但增加访问频率
+     * 可通过请求参数customStepSize进行覆盖
+     */
     @Value("${id.generator.step.size:1000}")
     private Integer defaultStepSize;
 
+    /**
+     * 号段刷新阈值配置
+     * 从配置文件id.generator.segment.threshold读取，默认值为0.1（10%）
+     * 当号段使用率超过此阈值时，触发异步预取新号段
+     * 用于避免号段耗尽时的阻塞等待，提高系统响应性能
+     * 取值范围：0.0-1.0，建议设置为0.1-0.3之间
+     */
     @Value("${id.generator.segment.threshold:0.1}")
-    private Double segmentThreshold; // 号段使用阈值，低于此值时预取新号段
+    private Double segmentThreshold;
 
+    /**
+     * 当前服务器的唯一标识符
+     * 在服务启动时自动生成，格式：主机名-IP地址-服务器类型
+     * 用于服务器注册、心跳上报和请求追踪
+     * 例如：server01-192.168.1.100-0
+     */
     private String serverId;
     
-    // 内存中的号段缓存 - 业务类型+时间键 -> 号段信息
+    /**
+     * 内存中的号段缓存映射
+     * Key：业务类型+时间键的组合（格式：businessType:timeKey）
+     * Value：对应的号段缓冲区对象
+     * 用于缓存从数据库获取的号段信息，避免频繁数据库访问
+     * 线程安全的ConcurrentHashMap实现
+     */
     private final ConcurrentHashMap<String, SegmentBuffer> segmentBuffers = new ConcurrentHashMap<>();
     
-    // 锁映射 - 每个业务类型+时间键对应一个锁
+    /**
+     * 号段操作锁映射
+     * Key：业务类型+时间键的组合（格式：businessType:timeKey）
+     * Value：对应的可重入锁对象
+     * 用于保证同一业务类型和时间键的号段操作的线程安全性
+     * 避免并发访问时的数据竞争和重复申请号段
+     */
     private final ConcurrentHashMap<String, ReentrantLock> lockMap = new ConcurrentHashMap<>();
 
     /**
-     * 号段缓冲区
+     * 号段缓冲区内部类
+     * 用于在内存中缓存和管理单个号段的状态信息
+     * 提供线程安全的ID分配和号段刷新机制
      */
     private static class SegmentBuffer {
+        /**
+         * 当前ID值的原子计数器
+         * 使用AtomicLong保证多线程环境下的原子性操作
+         * 每次获取ID时通过getAndIncrement()方法原子性递增
+         * 初始值为号段的起始值
+         */
         private final AtomicLong currentValue;
+        
+        /**
+         * 当前号段的最大值
+         * 使用volatile关键字保证多线程可见性
+         * 当currentValue达到此值时，需要申请新的号段
+         * 在号段刷新时会被更新为新的最大值
+         */
         private volatile long maxValue;
+        
+        /**
+         * 号段的分片类型
+         * 使用volatile关键字保证多线程可见性
+         * 0 - 偶数分片：生成偶数ID
+         * 1 - 奇数分片：生成奇数ID
+         * 决定了ID的奇偶性和分片策略
+         */
         private volatile int shardType;
+        
+        /**
+         * 号段刷新标志位
+         * 使用volatile关键字保证多线程可见性
+         * true - 需要刷新号段（已触发预取条件）
+         * false - 号段正常，无需刷新
+         * 用于避免重复触发号段预取操作
+         */
         private volatile boolean needRefresh;
+        
+        /**
+         * 号段刷新操作的互斥锁
+         * 使用ReentrantLock保证号段刷新操作的原子性
+         * 避免多个线程同时执行号段刷新，造成重复申请
+         * 支持可重入特性，同一线程可以多次获取锁
+         */
         private final ReentrantLock refreshLock = new ReentrantLock();
 
         public SegmentBuffer(long currentValue, long maxValue, int shardType) {
@@ -229,11 +316,21 @@ public class IdGeneratorService {
 
     /**
      * 获取或创建号段缓冲区
+     * 
+     * 该方法会根据当前系统状态智能选择分片类型：
+     * - 正常模式：使用当前服务器的分片类型（奇数服务器处理奇数分片，偶数服务器处理偶数分片）
+     * - 容错模式：当对方服务器下线时，当前服务器代理全部分片，根据业务类型和时间键的哈希值分配分片
+     * 
+     * @param segmentKey 号段缓存键，格式为：业务类型_时间键_分片类型
+     * @param businessType 业务类型，用于区分不同业务场景的ID生成需求
+     * @param timeKey 时间键，用于按时间维度分片管理ID号段
+     * @param request ID生成请求对象，包含生成参数和配置信息
+     * @return 号段缓冲区对象，包含当前可用的ID范围和分片信息
      */
     private SegmentBuffer getOrCreateSegmentBuffer(String segmentKey, String businessType, 
                                                    String timeKey, IdRequest request) {
         return segmentBuffers.computeIfAbsent(segmentKey, k -> {
-            // 确定分片类型
+            // 智能确定分片类型（支持容错机制）
             int shardType = determineShardType(request);
             
             // 从数据库获取或创建号段
@@ -254,7 +351,7 @@ public class IdGeneratorService {
             return request.getForceShardType();
         }
         
-        // 检查是否需要切换到对方分片（容错机制）
+        // 正常情况下使用当前服务器的分片类型
         int targetShardType = serverType;
         int oppositeShardType = 1 - serverType;
         
@@ -263,13 +360,43 @@ public class IdGeneratorService {
                 .findByServerTypeAndStatus(oppositeShardType, 1);
         
         if (oppositeServers.isEmpty()) {
-            // 对方服务器下线，当前服务器代理全部分片
+            // 对方服务器下线，当前服务器需要代理全部分片
             log.warn("对方服务器下线，当前服务器代理全部分片");
-            // 可以根据业务需要选择奇数或偶数分片
-            return targetShardType;
+            
+            // 根据业务类型和时间键的哈希值来决定使用哪个分片
+            // 这样可以保证请求的分布相对均匀
+            String hashKey = request.getBusinessType() + "_" + request.getEffectiveTimeKey();
+            int hashValue = Math.abs(hashKey.hashCode());
+            
+            // 使用哈希值的奇偶性来决定分片类型，保证负载均衡
+            int calculatedShardType = hashValue % 2;
+            
+            log.debug("容错模式：业务类型={}, 时间键={}, 计算分片类型={}", 
+                    request.getBusinessType(), request.getEffectiveTimeKey(), calculatedShardType);
+            
+            return calculatedShardType;
         }
         
+        // 对方服务器在线，使用当前服务器的分片类型
         return targetShardType;
+    }
+
+    /**
+     * 检查当前服务器是否处于容错模式（对方服务器下线）
+     * 
+     * @return true表示处于容错模式，需要代理全部分片；false表示正常模式
+     */
+    private boolean isInFailoverMode() {
+        int oppositeShardType = 1 - serverType;
+        List<ServerRegistry> oppositeServers = serverRegistryRepository
+                .findByServerTypeAndStatus(oppositeShardType, 1);
+        
+        boolean failoverMode = oppositeServers.isEmpty();
+        if (failoverMode) {
+            log.debug("当前处于容错模式，代理全部分片");
+        }
+        
+        return failoverMode;
     }
 
     /**

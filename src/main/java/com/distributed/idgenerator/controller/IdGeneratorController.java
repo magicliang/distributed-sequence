@@ -24,6 +24,12 @@ import java.util.Map;
 @CrossOrigin(origins = "*")
 public class IdGeneratorController {
 
+    /**
+     * ID生成器核心服务
+     * 负责处理ID生成的核心业务逻辑
+     * 包括号段管理、分片策略、缓存机制等功能
+     * 通过Spring依赖注入自动装配
+     */
     @Autowired
     private IdGeneratorService idGeneratorService;
 

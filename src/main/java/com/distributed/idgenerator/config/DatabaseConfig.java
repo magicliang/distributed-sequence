@@ -20,15 +20,40 @@ import javax.sql.DataSource;
 @Slf4j
 public class DatabaseConfig {
 
+    /**
+     * 数据源连接URL
+     * 从配置文件spring.datasource.url读取
+     * MySQL示例：jdbc:mysql://localhost:3306/idgenerator?useUnicode=true&characterEncoding=utf8&useSSL=false
+     * 如果未配置则为空字符串
+     */
     @Value("${spring.datasource.url:}")
     private String datasourceUrl;
 
+    /**
+     * 数据库用户名
+     * 从配置文件spring.datasource.username读取
+     * 用于数据库连接认证
+     * 如果未配置则为空字符串
+     */
     @Value("${spring.datasource.username:}")
     private String datasourceUsername;
 
+    /**
+     * 数据库密码
+     * 从配置文件spring.datasource.password读取
+     * 用于数据库连接认证
+     * 如果未配置则为空字符串
+     */
     @Value("${spring.datasource.password:}")
     private String datasourcePassword;
 
+    /**
+     * 数据库驱动类名
+     * 从配置文件spring.datasource.driver-class-name读取
+     * MySQL驱动：com.mysql.cj.jdbc.Driver
+     * H2驱动：org.h2.Driver
+     * 如果未配置则为空字符串
+     */
     @Value("${spring.datasource.driver-class-name:}")
     private String driverClassName;
 

@@ -398,4 +398,127 @@ class IdGeneratorServiceTest {
             assertEquals(0, oddCount, "偶数分片不应该生成奇数ID");
         }
     }
+
+    /**
+     * 测试容错机制 - 对方服务器下线时的分片选择
+     */
+    @Test
+    void testFailoverMechanism() {
+        // 模拟当前服务器为偶数服务器（serverType = 0）
+        // 清空所有奇数服务器（serverType = 1），模拟对方服务器下线
+        serverRegistryRepository.deleteAll();
+        
+        // 只注册当前偶数服务器
+        ServerRegistry currentServer = ServerRegistry.builder()
+                .serverId("test-server-0")
+                .serverType(0)
+                .status(1)
+                .build();
+        serverRegistryRepository.save(currentServer);
+        
+        // 创建多个不同的请求，测试分片分配
+        Map<String, Integer> businessShardMapping = new HashMap<>();
+        
+        for (int i = 0; i < 10; i++) {
+            String businessType = "test_business_" + i;
+            String timeKey = "20231101";
+            
+            IdRequest request = IdRequest.builder()
+                    .businessType(businessType)
+                    .timeKey(timeKey)
+                    .count(1)
+                    .build();
+            
+            IdResponse response = idGeneratorService.generateIds(request);
+            assertNotNull(response);
+            assertTrue(response.isSuccess());
+            
+            // 记录每个业务类型被分配到的分片
+            businessShardMapping.put(businessType, response.getShardType());
+            
+            System.out.println(String.format("业务类型: %s, 分配分片: %d (%s)", 
+                    businessType, response.getShardType(), response.getShardTypeDesc()));
+        }
+        
+        // 验证分片分配的合理性
+        long oddShardCount = businessShardMapping.values().stream()
+                .filter(shardType -> shardType == 1).count();
+        long evenShardCount = businessShardMapping.values().stream()
+                .filter(shardType -> shardType == 0).count();
+        
+        System.out.println("容错模式下分片分配统计:");
+        System.out.println("奇数分片业务数: " + oddShardCount);
+        System.out.println("偶数分片业务数: " + evenShardCount);
+        
+        // 验证两种分片都有分配（负载均衡）
+        assertTrue(oddShardCount > 0, "容错模式下应该有业务分配到奇数分片");
+        assertTrue(evenShardCount > 0, "容错模式下应该有业务分配到偶数分片");
+        
+        // 验证同一个业务类型+时间键的组合总是分配到相同分片（一致性）
+        for (int i = 0; i < 3; i++) {
+            String businessType = "test_business_0"; // 重复测试第一个业务类型
+            String timeKey = "20231101";
+            
+            IdRequest request = IdRequest.builder()
+                    .businessType(businessType)
+                    .timeKey(timeKey)
+                    .count(1)
+                    .build();
+            
+            IdResponse response = idGeneratorService.generateIds(request);
+            assertEquals(businessShardMapping.get(businessType), response.getShardType(),
+                    "相同业务类型和时间键应该始终分配到相同分片");
+        }
+    }
+
+    /**
+     * 测试强制指定分片类型
+     */
+    @Test
+    void testForceShardType() {
+        // 清理并注册服务器
+        serverRegistryRepository.deleteAll();
+        ServerRegistry server = ServerRegistry.builder()
+                .serverId("test-server-0")
+                .serverType(0)
+                .status(1)
+                .build();
+        serverRegistryRepository.save(server);
+        
+        // 测试强制指定奇数分片
+        IdRequest oddRequest = IdRequest.builder()
+                .businessType("test_force_odd")
+                .timeKey("20231101")
+                .count(5)
+                .forceShardType(1)
+                .build();
+        
+        IdResponse oddResponse = idGeneratorService.generateIds(oddRequest);
+        assertNotNull(oddResponse);
+        assertTrue(oddResponse.isSuccess());
+        assertEquals(1, oddResponse.getShardType());
+        
+        // 验证生成的ID都是奇数
+        for (Long id : oddResponse.getIds()) {
+            assertEquals(1, id % 2, "强制奇数分片应该生成奇数ID");
+        }
+        
+        // 测试强制指定偶数分片
+        IdRequest evenRequest = IdRequest.builder()
+                .businessType("test_force_even")
+                .timeKey("20231101")
+                .count(5)
+                .forceShardType(0)
+                .build();
+        
+        IdResponse evenResponse = idGeneratorService.generateIds(evenRequest);
+        assertNotNull(evenResponse);
+        assertTrue(evenResponse.isSuccess());
+        assertEquals(0, evenResponse.getShardType());
+        
+        // 验证生成的ID都是偶数
+        for (Long id : evenResponse.getIds()) {
+            assertEquals(0, id % 2, "强制偶数分片应该生成偶数ID");
+        }
+    }
 }
