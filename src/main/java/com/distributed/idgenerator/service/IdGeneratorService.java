@@ -193,17 +193,20 @@ public class IdGeneratorService {
         public void updateMaxValue(long newMaxValue) {
             this.maxValue = newMaxValue;
             this.needRefresh.set(false);
+            this.lastRefreshAttemptTime = 0; // 重置刷新尝试时间，避免误判超时
         }
         
         /**
          * 更新区间范围
          * 奇偶区间错开模式：同时更新起始值和最大值
+         * 成功刷新时重置所有刷新相关的状态
          */
         public void updateRange(long newStartValue, long newMaxValue) {
             this.startValue = newStartValue;
             this.maxValue = newMaxValue;
             this.currentValue.set(newStartValue);
             this.needRefresh.set(false);
+            this.lastRefreshAttemptTime = 0; // 重置刷新尝试时间，避免误判超时
         }
 
         /**
