@@ -601,12 +601,63 @@ public class IdGeneratorService {
         // 只有一种类型的服务器在线时，就是容错模式
         boolean failoverMode = !(evenServerOnline && oddServerOnline);
         
+        // 或者当前有代理分片时，也认为是容错模式
+        boolean hasProxyShards = segmentBuffers.keySet().stream()
+                .anyMatch(key -> key.contains("_proxy_"));
+        
+        failoverMode = failoverMode || hasProxyShards;
+        
         if (failoverMode) {
             String onlineType = evenServerOnline ? "偶数" : (oddServerOnline ? "奇数" : "无");
-            log.debug("当前处于容错模式，在线服务器类型: {}", onlineType);
+            log.debug("当前处于容错模式，在线服务器类型: {}, 代理分片数量: {}", 
+                    onlineType, hasProxyShards ? getProxyShardCount() : 0);
         }
         
         return failoverMode;
+    }
+    
+    /**
+     * 获取代理分片数量
+     */
+    private int getProxyShardCount() {
+        return (int) segmentBuffers.keySet().stream()
+                .filter(key -> key.contains("_proxy_"))
+                .count();
+    }
+    
+    /**
+     * 确保恢复的节点获取新的增长segment
+     * 清理本节点类型的所有缓存，强制从数据库重新获取
+     */
+    public void ensureRecoveredNodeGetsNewSegment() {
+        try {
+            List<String> keysToRemove = new ArrayList<>();
+            
+            // 找到所有属于当前节点类型的segment缓存
+            for (String key : segmentBuffers.keySet()) {
+                if (!key.contains("_proxy_")) {
+                    // 这是正常的segment，检查是否属于当前节点类型
+                    SegmentBuffer buffer = segmentBuffers.get(key);
+                    if (buffer != null && buffer.getShardType() == serverType) {
+                        keysToRemove.add(key);
+                    }
+                }
+            }
+            
+            // 清理这些缓存
+            for (String key : keysToRemove) {
+                segmentBuffers.remove(key);
+                log.info("清理恢复节点的segment缓存: {}", key);
+            }
+            
+            if (!keysToRemove.isEmpty()) {
+                log.info("恢复节点清理了 {} 个segment缓存，下次请求将从数据库获取新的增长segment", 
+                        keysToRemove.size());
+            }
+            
+        } catch (Exception e) {
+            log.error("清理恢复节点segment缓存失败", e);
+        }
     }
     
     /**
@@ -616,6 +667,7 @@ public class IdGeneratorService {
     public void handleServerFailover() {
         boolean evenServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(0, 1).isEmpty();
         boolean oddServerOnline = !serverRegistryRepository.findByServerTypeAndStatus(1, 1).isEmpty();
+        boolean wasInFailoverMode = isInFailoverMode();
         
         if (!evenServerOnline && oddServerOnline && serverType == 1) {
             // 偶数服务器下线，奇数服务器接管
@@ -625,9 +677,17 @@ public class IdGeneratorService {
             // 奇数服务器下线，偶数服务器接管
             log.info("检测到奇数服务器下线，偶数服务器开始接管奇数分片");
             takeOverShards(1);
-        } else if (evenServerOnline && oddServerOnline) {
-            // 双方都恢复，清理代理状态
-            cleanupProxyShards();
+        } else if (evenServerOnline && oddServerOnline && wasInFailoverMode) {
+            // 双方都恢复，使用简单的放弃策略
+            log.info("检测到服务器恢复，使用简单放弃策略清理代理状态");
+            
+            // 1. 放弃所有代理分片（允许ID浪费）
+            simpleAbandonProxyShards();
+            
+            // 2. 清理本节点的segment缓存，确保获取新的增长segment
+            ensureRecoveredNodeGetsNewSegment();
+            
+            log.info("服务器恢复完成，恢复节点将从数据库获取新的增长segment");
         }
     }
     
@@ -660,9 +720,51 @@ public class IdGeneratorService {
     }
     
     /**
-     * 清理代理分片
-     * 当对方服务器恢复后调用
+     * 简单的放弃代理分片策略
+     * 直接清理所有代理分片，不进行ID回收，允许ID浪费
+     * 恢复的节点将从数据库获取新的增长segment
      */
+    private void simpleAbandonProxyShards() {
+        try {
+            List<String> proxyKeys = segmentBuffers.keySet().stream()
+                    .filter(key -> key.contains("_proxy_"))
+                    .collect(java.util.stream.Collectors.toList());
+            
+            int abandonedCount = 0;
+            long totalAbandonedIds = 0;
+            
+            for (String proxyKey : proxyKeys) {
+                SegmentBuffer proxyBuffer = segmentBuffers.get(proxyKey);
+                if (proxyBuffer != null) {
+                    // 计算被放弃的ID数量（仅用于统计）
+                    long abandonedIds = proxyBuffer.getMaxValue() - proxyBuffer.getCurrentValue();
+                    totalAbandonedIds += abandonedIds;
+                    
+                    log.info("放弃代理分片: {}, 放弃ID数量: {}, 范围: [{}, {})", 
+                            proxyKey, abandonedIds, proxyBuffer.getCurrentValue(), proxyBuffer.getMaxValue());
+                }
+                
+                // 直接移除，不进行任何同步操作
+                segmentBuffers.remove(proxyKey);
+                abandonedCount++;
+            }
+            
+            if (abandonedCount > 0) {
+                log.info("服务器恢复完成，放弃了 {} 个代理分片，总计放弃ID数量: {}", 
+                        abandonedCount, totalAbandonedIds);
+                log.info("恢复的节点将从数据库获取新的增长segment，确保ID生成的连续性");
+            }
+        } catch (Exception e) {
+            log.error("放弃代理分片失败", e);
+        }
+    }
+    
+    /**
+     * 清理代理分片（保留原有复杂方法）
+     * 当对方服务器恢复后调用
+     * @deprecated 推荐使用 simpleAbandonProxyShards() 方法
+     */
+    @Deprecated
     private void cleanupProxyShards() {
         try {
             List<String> proxyKeys = segmentBuffers.keySet().stream()
@@ -1365,6 +1467,127 @@ public class IdGeneratorService {
             log.error("查询步长配置失败", e);
             result.put("success", false);
             result.put("message", "查询失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+    
+    // ==================== 简单放弃策略管理API ====================
+    
+    /**
+     * 手动触发简单放弃策略
+     * 用于运维场景，强制清理代理分片
+     */
+    public Map<String, Object> triggerSimpleAbandonStrategy() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            int proxyShardCount = getProxyShardCount();
+            
+            if (proxyShardCount == 0) {
+                result.put("success", true);
+                result.put("message", "当前没有代理分片需要清理");
+                result.put("abandonedCount", 0);
+                result.put("timestamp", System.currentTimeMillis());
+                return result;
+            }
+            
+            // 执行简单放弃策略
+            simpleAbandonProxyShards();
+            ensureRecoveredNodeGetsNewSegment();
+            
+            result.put("success", true);
+            result.put("message", "简单放弃策略执行完成");
+            result.put("abandonedCount", proxyShardCount);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            log.info("手动触发简单放弃策略完成，清理了 {} 个代理分片", proxyShardCount);
+            
+        } catch (Exception e) {
+            log.error("执行简单放弃策略失败", e);
+            result.put("success", false);
+            result.put("message", "执行失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+    
+    /**
+     * 获取放弃策略状态信息
+     */
+    public Map<String, Object> getAbandonStrategyStatus() {
+        Map<String, Object> status = new HashMap<>();
+        
+        try {
+            // 统计代理分片信息
+            List<Map<String, Object>> proxyShardDetails = new ArrayList<>();
+            long totalAbandonableIds = 0;
+            
+            for (String key : segmentBuffers.keySet()) {
+                if (key.contains("_proxy_")) {
+                    SegmentBuffer buffer = segmentBuffers.get(key);
+                    if (buffer != null) {
+                        Map<String, Object> detail = new HashMap<>();
+                        detail.put("key", key);
+                        detail.put("shardType", buffer.getShardType());
+                        detail.put("currentValue", buffer.getCurrentValue());
+                        detail.put("maxValue", buffer.getMaxValue());
+                        
+                        long abandonableIds = buffer.getMaxValue() - buffer.getCurrentValue();
+                        detail.put("abandonableIds", abandonableIds);
+                        totalAbandonableIds += abandonableIds;
+                        
+                        proxyShardDetails.add(detail);
+                    }
+                }
+            }
+            
+            status.put("proxyShardCount", proxyShardDetails.size());
+            status.put("proxyShardDetails", proxyShardDetails);
+            status.put("totalAbandonableIds", totalAbandonableIds);
+            status.put("isInFailoverMode", isInFailoverMode());
+            status.put("canUseAbandonStrategy", proxyShardDetails.size() > 0);
+            status.put("timestamp", System.currentTimeMillis());
+            
+        } catch (Exception e) {
+            log.error("获取放弃策略状态失败", e);
+            status.put("error", e.getMessage());
+            status.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return status;
+    }
+    
+    /**
+     * 强制清理恢复节点的segment缓存
+     * 用于确保恢复的节点获取新的增长segment
+     */
+    public Map<String, Object> forceCleanRecoveredNodeCache() {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            int originalCacheCount = segmentBuffers.size();
+            
+            // 执行清理
+            ensureRecoveredNodeGetsNewSegment();
+            
+            int newCacheCount = segmentBuffers.size();
+            int cleanedCount = originalCacheCount - newCacheCount;
+            
+            result.put("success", true);
+            result.put("message", "恢复节点缓存清理完成");
+            result.put("cleanedCount", cleanedCount);
+            result.put("remainingCacheCount", newCacheCount);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            log.info("手动清理恢复节点缓存完成，清理了 {} 个segment缓存", cleanedCount);
+            
+        } catch (Exception e) {
+            log.error("清理恢复节点缓存失败", e);
+            result.put("success", false);
+            result.put("message", "清理失败: " + e.getMessage());
             result.put("timestamp", System.currentTimeMillis());
         }
         
