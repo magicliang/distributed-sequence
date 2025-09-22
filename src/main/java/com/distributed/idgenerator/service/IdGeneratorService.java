@@ -243,7 +243,9 @@ public class IdGeneratorService {
 
     /**
      * 生成ID
+     * 使用事务管理确保ID生成过程的数据一致性
      */
+    @Transactional
     public IdResponse generateIds(IdRequest request) {
         String businessType = request.getBusinessType();
         String timeKey = request.getEffectiveTimeKey();
@@ -401,8 +403,9 @@ public class IdGeneratorService {
 
     /**
      * 获取或创建号段
+     * 注意：移除了@Transactional注解，因为private方法上的事务注解不会生效
+     * 事务管理应该在调用此方法的public方法上进行
      */
-    @Transactional
     private IdSegment getOrCreateSegment(String businessType, String timeKey, 
                                          int shardType, IdRequest request) {
         Optional<IdSegment> existingSegment = idSegmentRepository
@@ -462,8 +465,9 @@ public class IdGeneratorService {
 
     /**
      * 从数据库刷新号段
+     * 注意：移除了@Transactional注解，因为private方法上的事务注解不会生效
+     * 该方法在generateIds()事务中被调用，依赖外层事务管理
      */
-    @Transactional
     private boolean refreshSegmentFromDB(SegmentBuffer buffer, String businessType, 
                                          String timeKey, IdRequest request) {
         try {
