@@ -17,6 +17,7 @@ import java.net.InetAddress;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.ReentrantLock;
 
@@ -142,27 +143,21 @@ public class IdGeneratorService {
         
         /**
          * 号段刷新标志位
-         * 使用volatile关键字保证多线程可见性
+         * 使用AtomicBoolean保证多线程下的原子操作
          * true - 需要刷新号段（已触发预取条件）
          * false - 号段正常，无需刷新
-         * 用于避免重复触发号段预取操作
+         * 通过CAS操作确保只有一个线程能触发刷新操作
          */
-        private volatile boolean needRefresh;
+        private final AtomicBoolean needRefresh;
         
-        /**
-         * 号段刷新操作的互斥锁
-         * 使用ReentrantLock保证号段刷新操作的原子性
-         * 避免多个线程同时执行号段刷新，造成重复申请
-         * 支持可重入特性，同一线程可以多次获取锁
-         */
-        private final ReentrantLock refreshLock = new ReentrantLock();
+
 
         public SegmentBuffer(long startValue, long maxValue, int shardType) {
             this.currentValue = new AtomicLong(startValue);
             this.startValue = startValue;
             this.maxValue = maxValue;
             this.shardType = shardType;
-            this.needRefresh = false;
+            this.needRefresh = new AtomicBoolean(false);
         }
 
         public long getAndIncrement() {
@@ -183,7 +178,7 @@ public class IdGeneratorService {
 
         public void updateMaxValue(long newMaxValue) {
             this.maxValue = newMaxValue;
-            this.needRefresh = false;
+            this.needRefresh.set(false);
         }
         
         /**
@@ -194,7 +189,7 @@ public class IdGeneratorService {
             this.startValue = newStartValue;
             this.maxValue = newMaxValue;
             this.currentValue.set(newStartValue);
-            this.needRefresh = false;
+            this.needRefresh.set(false);
         }
 
         /**
@@ -213,16 +208,27 @@ public class IdGeneratorService {
         }
 
         public boolean isNeedRefresh() {
-            return needRefresh;
+            return needRefresh.get();
         }
 
-        public void setNeedRefresh(boolean needRefresh) {
-            this.needRefresh = needRefresh;
+        /**
+         * 尝试设置刷新标志位
+         * 使用CAS操作确保只有一个线程能成功设置
+         * @return true表示成功设置，false表示已经被其他线程设置
+         */
+        public boolean trySetNeedRefresh() {
+            return needRefresh.compareAndSet(false, true);
+        }
+        
+        /**
+         * 重置刷新标志位
+         * 在刷新完成后调用
+         */
+        public void resetNeedRefresh() {
+            needRefresh.set(false);
         }
 
-        public ReentrantLock getRefreshLock() {
-            return refreshLock;
-        }
+
     }
 
     @PostConstruct
@@ -321,9 +327,8 @@ public class IdGeneratorService {
             long currentId = buffer.getAndIncrement();
             
             // 检查是否需要刷新号段
-            if (buffer.shouldRefresh(segmentThreshold) && !buffer.isNeedRefresh()) {
-                buffer.setNeedRefresh(true);
-                // 异步刷新号段
+            if (buffer.shouldRefresh(segmentThreshold) && buffer.trySetNeedRefresh()) {
+                // 只有成功设置刷新标志位的线程才会执行异步刷新
                 refreshSegmentAsync(segmentKey, businessType, timeKey, request);
             }
             
@@ -549,7 +554,19 @@ public class IdGeneratorService {
         // 为简化实现，暂时使用同步方式
         SegmentBuffer buffer = segmentBuffers.get(segmentKey);
         if (buffer != null) {
-            refreshSegmentFromDB(buffer, businessType, timeKey, request);
+            try {
+                boolean success = refreshSegmentFromDB(buffer, businessType, timeKey, request);
+                if (!success) {
+                    // 刷新失败，重置标志位以便后续重试
+                    buffer.resetNeedRefresh();
+                    log.warn("异步刷新号段失败，已重置刷新标志位: {}", segmentKey);
+                }
+                // 注意：成功的情况下，refreshSegmentFromDB内部的updateRange方法会自动重置标志位
+            } catch (Exception e) {
+                // 异常情况下也要重置标志位
+                buffer.resetNeedRefresh();
+                log.error("异步刷新号段异常，已重置刷新标志位: " + segmentKey, e);
+            }
         }
     }
 
