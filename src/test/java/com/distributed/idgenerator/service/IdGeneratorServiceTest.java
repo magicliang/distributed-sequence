@@ -106,39 +106,45 @@ class IdGeneratorServiceTest {
     }
 
     @Test
-    void testOddEvenSharding() {
-        // 测试奇偶分片
+    void testOddEvenIntervalSharding() {
+        // 测试奇偶区间错开分片
         IdRequest oddRequest = IdRequest.builder()
-                .businessType(testBusinessType)
+                .businessType(testBusinessType + "_odd")
                 .timeKey(testTimeKey)
-                .count(5)
-                .forceShardType(1) // 强制奇数分片
+                .count(10)
+                .forceShardType(1) // 强制奇数服务器
                 .build();
 
         IdRequest evenRequest = IdRequest.builder()
-                .businessType(testBusinessType)
+                .businessType(testBusinessType + "_even")
                 .timeKey(testTimeKey)
-                .count(5)
-                .forceShardType(0) // 强制偶数分片
+                .count(10)
+                .forceShardType(0) // 强制偶数服务器
                 .build();
 
         IdResponse oddResponse = idGeneratorService.generateIds(oddRequest);
         IdResponse evenResponse = idGeneratorService.generateIds(evenRequest);
 
-        // 验证奇数分片
+        // 验证奇数服务器使用奇数区间（偶数索引区间）
         assertEquals(1, oddResponse.getShardType().intValue());
+        int stepSize = 1000; // 默认步长
         for (Long id : oddResponse.getIds()) {
-            assertEquals(1, id % 2, "ID应该是奇数: " + id);
+            long intervalIndex = (id - 1) / stepSize;
+            assertEquals(0, intervalIndex % 2, 
+                    String.format("奇数服务器的ID %d 应该在偶数索引区间内，当前区间索引: %d", id, intervalIndex));
         }
 
-        // 验证偶数分片
+        // 验证偶数服务器使用偶数区间（奇数索引区间）
         assertEquals(0, evenResponse.getShardType().intValue());
         for (Long id : evenResponse.getIds()) {
-            assertEquals(0, id % 2, "ID应该是偶数: " + id);
+            long intervalIndex = (id - 1) / stepSize;
+            assertEquals(1, intervalIndex % 2, 
+                    String.format("偶数服务器的ID %d 应该在奇数索引区间内，当前区间索引: %d", id, intervalIndex));
         }
 
-        System.out.println("奇数分片ID: " + oddResponse.getIds());
-        System.out.println("偶数分片ID: " + evenResponse.getIds());
+        System.out.println("奇数服务器区间ID: " + oddResponse.getIds());
+        System.out.println("偶数服务器区间ID: " + evenResponse.getIds());
+        System.out.println("奇偶区间错开验证通过");
     }
 
     @Test

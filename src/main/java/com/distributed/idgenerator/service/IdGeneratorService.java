@@ -112,7 +112,7 @@ public class IdGeneratorService {
          * 当前ID值的原子计数器
          * 使用AtomicLong保证多线程环境下的原子性操作
          * 每次获取ID时通过getAndIncrement()方法原子性递增
-         * 初始值为号段的起始值
+         * 奇偶区间错开模式：初始值为区间的起始值
          */
         private final AtomicLong currentValue;
         
@@ -120,16 +120,23 @@ public class IdGeneratorService {
          * 当前号段的最大值
          * 使用volatile关键字保证多线程可见性
          * 当currentValue达到此值时，需要申请新的号段
-         * 在号段刷新时会被更新为新的最大值
+         * 奇偶区间错开模式：表示当前区间的结束值
          */
         private volatile long maxValue;
         
         /**
+         * 当前号段的起始值
+         * 使用volatile关键字保证多线程可见性
+         * 奇偶区间错开模式：表示当前区间的起始值
+         */
+        private volatile long startValue;
+        
+        /**
          * 号段的分片类型
          * 使用volatile关键字保证多线程可见性
-         * 0 - 偶数分片：生成偶数ID
-         * 1 - 奇数分片：生成奇数ID
-         * 决定了ID的奇偶性和分片策略
+         * 0 - 偶数分片：使用偶数区间
+         * 1 - 奇数分片：使用奇数区间
+         * 决定了区间的分配策略
          */
         private volatile int shardType;
         
@@ -150,8 +157,9 @@ public class IdGeneratorService {
          */
         private final ReentrantLock refreshLock = new ReentrantLock();
 
-        public SegmentBuffer(long currentValue, long maxValue, int shardType) {
-            this.currentValue = new AtomicLong(currentValue);
+        public SegmentBuffer(long startValue, long maxValue, int shardType) {
+            this.currentValue = new AtomicLong(startValue);
+            this.startValue = startValue;
             this.maxValue = maxValue;
             this.shardType = shardType;
             this.needRefresh = false;
@@ -168,16 +176,36 @@ public class IdGeneratorService {
         public long getMaxValue() {
             return maxValue;
         }
+        
+        public long getStartValue() {
+            return startValue;
+        }
 
         public void updateMaxValue(long newMaxValue) {
             this.maxValue = newMaxValue;
             this.needRefresh = false;
         }
+        
+        /**
+         * 更新区间范围
+         * 奇偶区间错开模式：同时更新起始值和最大值
+         */
+        public void updateRange(long newStartValue, long newMaxValue) {
+            this.startValue = newStartValue;
+            this.maxValue = newMaxValue;
+            this.currentValue.set(newStartValue);
+            this.needRefresh = false;
+        }
 
+        /**
+         * 判断是否需要刷新号段
+         * 奇偶区间错开模式：基于区间使用率计算
+         */
         public boolean shouldRefresh(double threshold) {
             long current = currentValue.get();
-            long total = maxValue - (maxValue % 2 == shardType ? maxValue - 1 : maxValue);
-            return (double)(current - (current % 2 == shardType ? current - 1 : current)) / total > threshold;
+            long total = maxValue - startValue + 1;
+            long used = current - startValue + 1;
+            return (double) used / total > threshold;
         }
 
         public int getShardType() {
@@ -285,6 +313,7 @@ public class IdGeneratorService {
 
     /**
      * 生成单个ID
+     * 奇偶区间错开模式：奇数服务器使用奇数区间，偶数服务器使用偶数区间
      */
     private Long generateSingleId(SegmentBuffer buffer, String segmentKey, 
                                   String businessType, String timeKey, IdRequest request) {
@@ -309,19 +338,18 @@ public class IdGeneratorService {
                 }
             }
             
-            // 确保ID符合奇偶性要求
-            if (currentId % 2 == buffer.getShardType()) {
-                return currentId;
-            }
+            // 奇偶区间错开模式：直接返回区间内的ID，无需奇偶性检查
+            return currentId;
         }
     }
 
     /**
      * 获取或创建号段缓冲区
      * 
-     * 该方法会根据当前系统状态智能选择分片类型：
-     * - 正常模式：使用当前服务器的分片类型（奇数服务器处理奇数分片，偶数服务器处理偶数分片）
-     * - 容错模式：当对方服务器下线时，当前服务器代理全部分片，根据业务类型和时间键的哈希值分配分片
+     * 奇偶区间错开模式：
+     * - 奇数服务器：使用奇数区间 (1-1000, 2001-3000, 4001-5000, ...)
+     * - 偶数服务器：使用偶数区间 (1001-2000, 3001-4000, 5001-6000, ...)
+     * - 容错模式：当对方服务器下线时，当前服务器代理全部区间
      * 
      * @param segmentKey 号段缓存键，格式为：业务类型_时间键_分片类型
      * @param businessType 业务类型，用于区分不同业务场景的ID生成需求
@@ -338,10 +366,50 @@ public class IdGeneratorService {
             // 从数据库获取或创建号段
             IdSegment segment = getOrCreateSegment(businessType, timeKey, shardType, request);
             
-            // 创建缓冲区
-            long startValue = segment.getMaxValue() - segment.getStepSize();
-            return new SegmentBuffer(startValue, segment.getMaxValue(), shardType);
+            // 奇偶区间错开模式：计算区间起始值
+            long startValue = calculateIntervalStartValue(segment.getMaxValue(), segment.getStepSize(), shardType);
+            long endValue = segment.getMaxValue();
+            
+            return new SegmentBuffer(startValue, endValue, shardType);
         });
+    }
+    
+    /**
+     * 计算奇偶区间的起始值
+     * 奇偶区间错开规则：
+     * - 奇数服务器：区间 [1, stepSize], [2*stepSize+1, 3*stepSize], [4*stepSize+1, 5*stepSize], ...
+     * - 偶数服务器：区间 [stepSize+1, 2*stepSize], [3*stepSize+1, 4*stepSize], [5*stepSize+1, 6*stepSize], ...
+     * 
+     * @param maxValue 当前最大值
+     * @param stepSize 步长
+     * @param shardType 分片类型 (0-偶数, 1-奇数)
+     * @return 区间起始值
+     */
+    private long calculateIntervalStartValue(long maxValue, int stepSize, int shardType) {
+        // 计算当前是第几个区间
+        long intervalIndex = (maxValue - 1) / stepSize;
+        
+        if (shardType == 1) {
+            // 奇数服务器：使用奇数区间
+            // 第0个区间: [1, stepSize]
+            // 第1个区间: [2*stepSize+1, 3*stepSize]
+            // 第2个区间: [4*stepSize+1, 5*stepSize]
+            if (intervalIndex % 2 == 0) {
+                return intervalIndex * stepSize + 1;
+            } else {
+                return (intervalIndex + 1) * stepSize + 1;
+            }
+        } else {
+            // 偶数服务器：使用偶数区间
+            // 第0个区间: [stepSize+1, 2*stepSize]
+            // 第1个区间: [3*stepSize+1, 4*stepSize]
+            // 第2个区间: [5*stepSize+1, 6*stepSize]
+            if (intervalIndex % 2 == 0) {
+                return stepSize + 1;
+            } else {
+                return (intervalIndex + 1) * stepSize + 1;
+            }
+        }
     }
 
     /**
@@ -403,8 +471,7 @@ public class IdGeneratorService {
 
     /**
      * 获取或创建号段
-     * 注意：移除了@Transactional注解，因为private方法上的事务注解不会生效
-     * 事务管理应该在调用此方法的public方法上进行
+     * 奇偶区间错开模式：每个分片类型独立管理自己的区间序列
      */
     private IdSegment getOrCreateSegment(String businessType, String timeKey, 
                                          int shardType, IdRequest request) {
@@ -419,15 +486,38 @@ public class IdGeneratorService {
         int stepSize = request.getCustomStepSize() != null ? 
                 request.getCustomStepSize() : defaultStepSize;
         
+        // 奇偶区间错开模式：计算初始最大值
+        long initialMaxValue = calculateInitialMaxValue(stepSize, shardType);
+        
         IdSegment newSegment = IdSegment.builder()
                 .businessType(businessType)
                 .timeKey(timeKey)
                 .shardType(shardType)
-                .maxValue((long) stepSize)
+                .maxValue(initialMaxValue)
                 .stepSize(stepSize)
                 .build();
         
         return idSegmentRepository.save(newSegment);
+    }
+    
+    /**
+     * 计算初始最大值
+     * 奇偶区间错开规则：
+     * - 奇数服务器：第一个区间 [1, stepSize]，初始maxValue = stepSize
+     * - 偶数服务器：第一个区间 [stepSize+1, 2*stepSize]，初始maxValue = 2*stepSize
+     * 
+     * @param stepSize 步长
+     * @param shardType 分片类型 (0-偶数, 1-奇数)
+     * @return 初始最大值
+     */
+    private long calculateInitialMaxValue(int stepSize, int shardType) {
+        if (shardType == 1) {
+            // 奇数服务器：第一个区间 [1, stepSize]
+            return stepSize;
+        } else {
+            // 偶数服务器：第一个区间 [stepSize+1, 2*stepSize]
+            return 2L * stepSize;
+        }
     }
 
     /**
@@ -465,8 +555,7 @@ public class IdGeneratorService {
 
     /**
      * 从数据库刷新号段
-     * 注意：移除了@Transactional注解，因为private方法上的事务注解不会生效
-     * 该方法在generateIds()事务中被调用，依赖外层事务管理
+     * 奇偶区间错开模式：每次刷新时跳跃到下一个属于当前分片类型的区间
      * 
      * 支持步长变更：
      * 1. 检测步长是否发生变化
@@ -492,20 +581,25 @@ public class IdGeneratorService {
                 stepSizeChanged = segment.needsStepSizeUpdate(newStepSize);
                 
                 if (stepSizeChanged) {
-                    // 步长发生变化，同时更新最大值和步长
-                    updateCount = idSegmentRepository.updateMaxValueAndStepSizeAtomically(
-                            businessType, timeKey, shardType, newStepSize);
-                    log.info("检测到步长变更: {} 从 {} 变更为 {}", 
-                            buildSegmentKey(businessType, timeKey), segment.getStepSize(), newStepSize);
+                    // 步长发生变化，需要重新计算下一个区间
+                    long nextMaxValue = calculateNextIntervalMaxValue(segment.getMaxValue(), 
+                            segment.getStepSize(), newStepSize, shardType);
+                    updateCount = idSegmentRepository.updateMaxValueAndStepSizeAtomicallyWithValue(
+                            businessType, timeKey, shardType, nextMaxValue, newStepSize);
+                    log.info("检测到步长变更: {} 从 {} 变更为 {}, 新区间最大值: {}", 
+                            buildSegmentKey(businessType, timeKey), segment.getStepSize(), newStepSize, nextMaxValue);
                 } else {
-                    // 步长未变化，仅更新最大值
-                    updateCount = idSegmentRepository.updateMaxValueAtomically(
-                            businessType, timeKey, shardType, newStepSize);
+                    // 步长未变化，计算下一个区间
+                    long nextMaxValue = calculateNextIntervalMaxValue(segment.getMaxValue(), 
+                            newStepSize, newStepSize, shardType);
+                    updateCount = idSegmentRepository.updateMaxValueAtomicallyWithValue(
+                            businessType, timeKey, shardType, nextMaxValue);
                 }
             } else {
-                // 号段不存在，使用普通更新
-                updateCount = idSegmentRepository.updateMaxValueAtomically(
-                        businessType, timeKey, shardType, newStepSize);
+                // 号段不存在，使用初始值
+                long initialMaxValue = calculateInitialMaxValue(newStepSize, shardType);
+                updateCount = idSegmentRepository.updateMaxValueAtomicallyWithValue(
+                        businessType, timeKey, shardType, initialMaxValue);
             }
             
             if (updateCount > 0) {
@@ -514,14 +608,16 @@ public class IdGeneratorService {
                         .getCurrentMaxValue(businessType, timeKey, shardType);
                 
                 if (newMaxValue.isPresent()) {
-                    buffer.updateMaxValue(newMaxValue.get());
+                    // 重新计算缓冲区的起始值
+                    long newStartValue = calculateIntervalStartValue(newMaxValue.get(), newStepSize, shardType);
+                    buffer.updateRange(newStartValue, newMaxValue.get());
                     
                     if (stepSizeChanged) {
-                        log.info("号段刷新成功（含步长变更）: {} -> {}, 新步长: {}", 
-                                buildSegmentKey(businessType, timeKey), newMaxValue.get(), newStepSize);
+                        log.info("号段刷新成功（含步长变更）: {} -> [{}, {}], 新步长: {}", 
+                                buildSegmentKey(businessType, timeKey), newStartValue, newMaxValue.get(), newStepSize);
                     } else {
-                        log.debug("号段刷新成功: {} -> {}", 
-                                buildSegmentKey(businessType, timeKey), newMaxValue.get());
+                        log.debug("号段刷新成功: {} -> [{}, {}]", 
+                                buildSegmentKey(businessType, timeKey), newStartValue, newMaxValue.get());
                     }
                     return true;
                 }
@@ -533,6 +629,34 @@ public class IdGeneratorService {
             log.error("刷新号段异常: " + buildSegmentKey(businessType, timeKey), e);
             return false;
         }
+    }
+    
+    /**
+     * 计算下一个区间的最大值
+     * 奇偶区间错开模式：跳跃到下一个属于当前分片类型的区间
+     * 
+     * @param currentMaxValue 当前最大值
+     * @param currentStepSize 当前步长
+     * @param newStepSize 新步长
+     * @param shardType 分片类型
+     * @return 下一个区间的最大值
+     */
+    private long calculateNextIntervalMaxValue(long currentMaxValue, int currentStepSize, 
+                                               int newStepSize, int shardType) {
+        // 计算当前是第几个区间
+        long currentIntervalIndex = (currentMaxValue - 1) / currentStepSize;
+        
+        // 跳跃到下一个属于当前分片类型的区间
+        long nextIntervalIndex;
+        if (shardType == 1) {
+            // 奇数服务器：0, 2, 4, 6, ... (偶数索引)
+            nextIntervalIndex = ((currentIntervalIndex / 2) + 1) * 2;
+        } else {
+            // 偶数服务器：1, 3, 5, 7, ... (奇数索引)
+            nextIntervalIndex = ((currentIntervalIndex / 2) + 1) * 2 + 1;
+        }
+        
+        return (nextIntervalIndex + 1) * newStepSize;
     }
 
     /**

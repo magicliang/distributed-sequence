@@ -3,341 +3,375 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>分布式ID生成器 - 奇偶分片高可用方案</title>
+    <title>分布式ID生成器 - 奇偶区间错开演示</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        .card-hover:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .interval-box {
+            transition: all 0.3s ease;
+            border: 2px solid transparent;
+        }
+        .interval-box.odd {
+            background: linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%);
+            border-color: #ff6b9d;
+        }
+        .interval-box.even {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            border-color: #4facfe;
+        }
+        .interval-box.active {
+            transform: scale(1.05);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+        }
+        .server-status {
+            position: relative;
+            overflow: hidden;
+        }
+        .server-status::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+        .server-status.online::before {
+            left: 100%;
+        }
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+    </style>
 </head>
 <body class="bg-gray-50 min-h-screen">
-    <div id="app">
-        <!-- 头部导航 -->
-        <header class="bg-white shadow-sm border-b">
-            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-                <div class="flex justify-between items-center py-4">
-                    <div class="flex items-center">
-                        <i class="fas fa-cogs text-blue-600 text-2xl mr-3"></i>
-                        <h1 class="text-2xl font-bold text-gray-900">分布式ID生成器</h1>
-                        <span class="ml-3 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">奇偶分片高可用</span>
-                    </div>
-                    <div class="flex items-center space-x-4">
-                        <button @click="refreshStatus" class="text-gray-600 hover:text-blue-600">
-                            <i class="fas fa-sync-alt"></i>
-                        </button>
-                        <div class="flex items-center">
-                            <div class="w-2 h-2 bg-green-400 rounded-full mr-2"></div>
-                            <span class="text-sm text-gray-600">服务正常</span>
-                        </div>
+    <!-- 顶部导航 -->
+    <nav class="gradient-bg text-white shadow-lg">
+        <div class="container mx-auto px-6 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <i class="fas fa-cogs text-2xl"></i>
+                    <h1 class="text-2xl font-bold">分布式ID生成器</h1>
+                    <span class="bg-white bg-opacity-20 px-3 py-1 rounded-full text-sm">奇偶区间错开模式</span>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-3 h-3 bg-green-400 rounded-full pulse"></div>
+                        <span class="text-sm">系统运行中</span>
                     </div>
                 </div>
             </div>
-        </header>
+        </div>
+    </nav>
 
-        <!-- 主要内容区域 -->
-        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-            <!-- 服务器状态卡片 -->
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-2 bg-blue-100 rounded-lg">
-                            <i class="fas fa-server text-blue-600"></i>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">服务器类型</p>
-                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.serverTypeDesc || '加载中...' }}</p>
-                        </div>
+    <div class="container mx-auto px-6 py-8">
+        <!-- 系统概览 -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-8">
+            <!-- 奇数服务器状态 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-800">奇数服务器</h3>
+                    <div class="server-status online bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                        <i class="fas fa-circle text-green-500 mr-1"></i>在线
                     </div>
                 </div>
-                
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-2 bg-green-100 rounded-lg">
-                            <i class="fas fa-database text-green-600"></i>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">偶数服务器</p>
-                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.evenServerCount || 0 }} 台在线</p>
-                        </div>
+                <div class="space-y-3">
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">服务器类型</span>
+                        <span class="font-medium">奇数分片 (Type 1)</span>
                     </div>
-                </div>
-                
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-2 bg-purple-100 rounded-lg">
-                            <i class="fas fa-database text-purple-600"></i>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">奇数服务器</p>
-                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.oddServerCount || 0 }} 台在线</p>
-                        </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">管理区间</span>
+                        <span class="font-medium text-pink-600">奇数区间</span>
                     </div>
-                </div>
-                
-                <div class="bg-white rounded-lg shadow p-6">
-                    <div class="flex items-center">
-                        <div class="p-2 bg-yellow-100 rounded-lg">
-                            <i class="fas fa-memory text-yellow-600"></i>
-                        </div>
-                        <div class="ml-4">
-                            <p class="text-sm font-medium text-gray-600">号段缓存</p>
-                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.segmentBufferCount || 0 }} 个</p>
-                        </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">当前区间</span>
+                        <span class="font-medium" id="odd-current-interval">[1, 1000]</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">已生成ID</span>
+                        <span class="font-medium" id="odd-generated-count">0</span>
                     </div>
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                <!-- ID生成器面板 -->
-                <div class="bg-white rounded-lg shadow">
-                    <div class="px-6 py-4 border-b border-gray-200">
-                        <h2 class="text-lg font-semibold text-gray-900 flex items-center">
-                            <i class="fas fa-plus-circle text-blue-600 mr-2"></i>
-                            ID生成器
-                        </h2>
-                    </div>
-                    <div class="p-6">
-                        <form @submit.prevent="generateIds" class="space-y-4">
-                            <div>
-                                <label class="block text-sm font-medium text-gray-700 mb-2">业务类型</label>
-                                <input v-model="idRequest.businessType" 
-                                       type="text" 
-                                       placeholder="例如: order, user, product"
-                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                            </div>
-                            
-                            <div class="grid grid-cols-2 gap-4">
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">生成数量</label>
-                                    <input v-model.number="idRequest.count" 
-                                           type="number" 
-                                           min="1" 
-                                           max="10000"
-                                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                </div>
-                                <div>
-                                    <label class="block text-sm font-medium text-gray-700 mb-2">时间键（可选）</label>
-                                    <input v-model="idRequest.timeKey" 
-                                           type="text" 
-                                           placeholder="例如: 20231215"
-                                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                </div>
-                            </div>
-
-                            <!-- 高级选项 -->
-                            <div class="border-t pt-4">
-                                <button type="button" 
-                                        @click="showAdvanced = !showAdvanced"
-                                        class="flex items-center text-sm text-blue-600 hover:text-blue-800">
-                                    <i :class="showAdvanced ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" class="mr-1"></i>
-                                    高级选项
-                                </button>
-                                
-                                <div v-show="showAdvanced" class="mt-4 space-y-4">
-                                    <div class="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-2">强制分片类型</label>
-                                            <select v-model="idRequest.forceShardType" 
-                                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                                <option :value="null">自动选择</option>
-                                                <option :value="0">偶数分片</option>
-                                                <option :value="1">奇数分片</option>
-                                            </select>
-                                        </div>
-                                        <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-2">自定义步长</label>
-                                            <input v-model.number="idRequest.customStepSize" 
-                                                   type="number" 
-                                                   min="100" 
-                                                   max="10000"
-                                                   placeholder="默认1000"
-                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                        </div>
-                                    </div>
-                                    
-                                    <div>
-                                        <label class="flex items-center">
-                                            <input v-model="idRequest.includeRouting" 
-                                                   type="checkbox" 
-                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
-                                            <span class="ml-2 text-sm text-gray-700">包含路由信息</span>
-                                        </label>
-                                    </div>
-                                    
-                                    <div v-show="idRequest.includeRouting" class="grid grid-cols-2 gap-4">
-                                        <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-2">分库数量</label>
-                                            <input v-model.number="idRequest.shardDbCount" 
-                                                   type="number" 
-                                                   min="1" 
-                                                   max="1024"
-                                                   placeholder="例如: 4"
-                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                        </div>
-                                        <div>
-                                            <label class="block text-sm font-medium text-gray-700 mb-2">分表数量</label>
-                                            <input v-model.number="idRequest.shardTableCount" 
-                                                   type="number" 
-                                                   min="1" 
-                                                   max="1024"
-                                                   placeholder="例如: 8"
-                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <button type="submit" 
-                                    :disabled="loading || !idRequest.businessType"
-                                    class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
-                                <i v-if="loading" class="fas fa-spinner fa-spin mr-2"></i>
-                                <i v-else class="fas fa-magic mr-2"></i>
-                                {{ loading ? '生成中...' : '生成ID' }}
-                            </button>
-                        </form>
+            <!-- 偶数服务器状态 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-800">偶数服务器</h3>
+                    <div class="server-status online bg-green-100 text-green-800 px-3 py-1 rounded-full text-sm font-medium">
+                        <i class="fas fa-circle text-green-500 mr-1"></i>在线
                     </div>
                 </div>
-
-                <!-- 生成结果面板 -->
-                <div class="bg-white rounded-lg shadow">
-                    <div class="px-6 py-4 border-b border-gray-200">
-                        <h2 class="text-lg font-semibold text-gray-900 flex items-center">
-                            <i class="fas fa-list-ol text-green-600 mr-2"></i>
-                            生成结果
-                        </h2>
+                <div class="space-y-3">
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">服务器类型</span>
+                        <span class="font-medium">偶数分片 (Type 0)</span>
                     </div>
-                    <div class="p-6">
-                        <div v-if="!lastResponse" class="text-center text-gray-500 py-8">
-                            <i class="fas fa-info-circle text-4xl mb-4"></i>
-                            <p>请在左侧输入参数并点击"生成ID"按钮</p>
-                        </div>
-                        
-                        <div v-else class="space-y-4">
-                            <!-- 基本信息 -->
-                            <div class="bg-gray-50 rounded-lg p-4">
-                                <div class="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <span class="font-medium text-gray-600">业务类型:</span>
-                                        <span class="ml-2 text-gray-900">{{ lastResponse.businessType }}</span>
-                                    </div>
-                                    <div>
-                                        <span class="font-medium text-gray-600">时间键:</span>
-                                        <span class="ml-2 text-gray-900">{{ lastResponse.timeKey }}</span>
-                                    </div>
-                                    <div>
-                                        <span class="font-medium text-gray-600">分片类型:</span>
-                                        <span class="ml-2 text-gray-900">{{ getShardTypeDesc(lastResponse.shardType) }}</span>
-                                    </div>
-                                    <div>
-                                        <span class="font-medium text-gray-600">生成数量:</span>
-                                        <span class="ml-2 text-gray-900">{{ lastResponse.ids.length }}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- 路由信息 -->
-                            <div v-if="lastResponse.routingInfo" class="bg-blue-50 rounded-lg p-4">
-                                <h4 class="font-medium text-blue-900 mb-2">路由信息</h4>
-                                <div class="grid grid-cols-2 gap-4 text-sm">
-                                    <div>
-                                        <span class="font-medium text-blue-600">数据库索引:</span>
-                                        <span class="ml-2 text-blue-900">{{ lastResponse.routingInfo.dbIndex }}</span>
-                                    </div>
-                                    <div>
-                                        <span class="font-medium text-blue-600">表索引:</span>
-                                        <span class="ml-2 text-blue-900">{{ lastResponse.routingInfo.tableIndex }}</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- ID列表 -->
-                            <div>
-                                <div class="flex justify-between items-center mb-2">
-                                    <h4 class="font-medium text-gray-900">生成的ID列表</h4>
-                                    <button @click="copyIds" 
-                                            class="text-sm text-blue-600 hover:text-blue-800">
-                                        <i class="fas fa-copy mr-1"></i>复制
-                                    </button>
-                                </div>
-                                <div class="bg-gray-900 text-green-400 rounded-lg p-4 font-mono text-sm max-h-64 overflow-y-auto">
-                                    <div v-for="(id, index) in lastResponse.ids" :key="index" class="py-1">
-                                        {{ id }}
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">管理区间</span>
+                        <span class="font-medium text-blue-600">偶数区间</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">当前区间</span>
+                        <span class="font-medium" id="even-current-interval">[1001, 2000]</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">已生成ID</span>
+                        <span class="font-medium" id="even-generated-count">0</span>
                     </div>
                 </div>
             </div>
 
-            <!-- 历史记录 -->
-            <div v-if="history.length > 0" class="mt-8 bg-white rounded-lg shadow">
-                <div class="px-6 py-4 border-b border-gray-200">
-                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
-                        <i class="fas fa-history text-gray-600 mr-2"></i>
-                        生成历史
-                    </h2>
+            <!-- 系统统计 -->
+            <div class="bg-white rounded-xl shadow-lg p-6 card-hover">
+                <div class="flex items-center justify-between mb-4">
+                    <h3 class="text-lg font-semibold text-gray-800">系统统计</h3>
+                    <i class="fas fa-chart-line text-blue-500 text-xl"></i>
                 </div>
-                <div class="p-6">
-                    <div class="overflow-x-auto">
-                        <table class="min-w-full divide-y divide-gray-200">
-                            <thead class="bg-gray-50">
-                                <tr>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">时间</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">业务类型</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">数量</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分片类型</th>
-                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID范围</th>
-                                </tr>
-                            </thead>
-                            <tbody class="bg-white divide-y divide-gray-200">
-                                <tr v-for="(record, index) in history.slice(0, 10)" :key="index">
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                        {{ formatTime(record.timestamp) }}
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                        {{ record.businessType }}
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                        {{ record.ids.length }}
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                        <span :class="record.shardType === 1 ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'" 
-                                              class="px-2 py-1 text-xs rounded-full">
-                                            {{ getShardTypeDesc(record.shardType) }}
-                                        </span>
-                                    </td>
-                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                                        {{ Math.min(...record.ids) }} - {{ Math.max(...record.ids) }}
-                                    </td>
-                                </tr>
-                            </tbody>
-                        </table>
+                <div class="space-y-3">
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">总生成ID数</span>
+                        <span class="font-medium text-green-600" id="total-generated">0</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">当前步长</span>
+                        <span class="font-medium" id="current-step-size">1000</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">区间利用率</span>
+                        <span class="font-medium" id="interval-usage">0%</span>
+                    </div>
+                    <div class="flex justify-between">
+                        <span class="text-gray-600">ID浪费率</span>
+                        <span class="font-medium text-green-600">0%</span>
                     </div>
                 </div>
-            </div>
-        </main>
-
-        <!-- 错误提示 -->
-        <div v-if="error" 
-             class="fixed bottom-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg">
-            <div class="flex items-center">
-                <i class="fas fa-exclamation-triangle mr-2"></i>
-                {{ error }}
-                <button @click="error = ''" class="ml-4 text-white hover:text-gray-200">
-                    <i class="fas fa-times"></i>
-                </button>
             </div>
         </div>
 
-        <!-- 成功提示 -->
-        <div v-if="success" 
-             class="fixed bottom-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg">
-            <div class="flex items-center">
-                <i class="fas fa-check-circle mr-2"></i>
-                {{ success }}
-                <button @click="success = ''" class="ml-4 text-white hover:text-gray-200">
-                    <i class="fas fa-times"></i>
-                </button>
+        <!-- 区间可视化 -->
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+            <div class="flex items-center justify-between mb-6">
+                <h3 class="text-xl font-semibold text-gray-800">奇偶区间分配可视化</h3>
+                <div class="flex items-center space-x-4">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-4 h-4 rounded interval-box odd"></div>
+                        <span class="text-sm text-gray-600">奇数服务器区间</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <div class="w-4 h-4 rounded interval-box even"></div>
+                        <span class="text-sm text-gray-600">偶数服务器区间</span>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3" id="interval-visualization">
+                <!-- 区间将通过JavaScript动态生成 -->
+            </div>
+            
+            <div class="mt-6 text-center">
+                <p class="text-gray-600 text-sm">
+                    奇偶区间错开策略：奇数服务器管理区间索引为偶数的区间（0,2,4...），偶数服务器管理区间索引为奇数的区间（1,3,5...）
+                </p>
+            </div>
+        </div>
+
+        <!-- 操作面板 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <!-- ID生成控制 -->
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <h3 class="text-xl font-semibold text-gray-800 mb-6">ID生成控制</h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">业务类型</label>
+                        <select id="business-type" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="user_id">用户ID</option>
+                            <option value="order_id">订单ID</option>
+                            <option value="product_id">商品ID</option>
+                            <option value="custom">自定义</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">服务器类型</label>
+                        <select id="server-type" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            <option value="1">奇数服务器 (Type 1)</option>
+                            <option value="0">偶数服务器 (Type 0)</option>
+                            <option value="auto">自动选择</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">生成数量</label>
+                        <input type="number" id="generate-count" value="10" min="1" max="100" 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">步长设置</label>
+                        <input type="number" id="step-size" value="1000" min="100" max="10000" step="100"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                    </div>
+                    
+                    <button onclick="generateIds()" 
+                            class="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white py-3 px-6 rounded-lg font-medium hover:from-blue-600 hover:to-purple-700 transition-all duration-300 transform hover:scale-105">
+                        <i class="fas fa-play mr-2"></i>生成ID
+                    </button>
+                </div>
+            </div>
+
+            <!-- 生成结果 -->
+            <div class="bg-white rounded-xl shadow-lg p-6">
+                <h3 class="text-xl font-semibold text-gray-800 mb-6">生成结果</h3>
+                
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">最新生成的ID</label>
+                        <div id="generated-ids" class="bg-gray-50 rounded-lg p-4 min-h-[120px] max-h-[200px] overflow-y-auto">
+                            <p class="text-gray-500 text-center">点击"生成ID"按钮开始生成</p>
+                        </div>
+                    </div>
+                    
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">使用区间</label>
+                            <div id="used-interval" class="text-lg font-mono text-blue-600">-</div>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">服务器类型</label>
+                            <div id="used-server-type" class="text-lg font-medium text-green-600">-</div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">ID分布统计</label>
+                        <div id="id-distribution-chart" style="height: 200px;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 区间跳跃演示 -->
+        <div class="bg-white rounded-xl shadow-lg p-6 mb-8">
+            <h3 class="text-xl font-semibold text-gray-800 mb-6">区间跳跃机制演示</h3>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                    <h4 class="text-lg font-medium text-gray-700 mb-4">奇数服务器区间序列</h4>
+                    <div class="space-y-2" id="odd-intervals">
+                        <!-- 动态生成 -->
+                    </div>
+                </div>
+                
+                <div>
+                    <h4 class="text-lg font-medium text-gray-700 mb-4">偶数服务器区间序列</h4>
+                    <div class="space-y-2" id="even-intervals">
+                        <!-- 动态生成 -->
+                    </div>
+                </div>
+            </div>
+            
+            <div class="mt-6 p-4 bg-blue-50 rounded-lg">
+                <h5 class="font-medium text-blue-800 mb-2">区间跳跃规则说明：</h5>
+                <ul class="text-sm text-blue-700 space-y-1">
+                    <li>• 奇数服务器：使用区间索引为偶数的区间 (0, 2, 4, 6, ...)</li>
+                    <li>• 偶数服务器：使用区间索引为奇数的区间 (1, 3, 5, 7, ...)</li>
+                    <li>• 每个区间大小为步长值，区间之间完全隔离，无ID重叠</li>
+                    <li>• 当前区间用完后，自动跳跃到下一个属于该服务器的区间</li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- 性能对比 -->
+        <div class="bg-white rounded-xl shadow-lg p-6">
+            <h3 class="text-xl font-semibold text-gray-800 mb-6">奇偶区间错开 vs 奇偶分离对比</h3>
+            
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <div>
+                    <h4 class="text-lg font-medium text-green-600 mb-4">✅ 奇偶区间错开（当前方案）</h4>
+                    <div class="space-y-3">
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-check-circle text-green-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">零ID浪费</div>
+                                <div class="text-sm text-gray-600">每个区间完全独立，无ID重叠浪费</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-check-circle text-green-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">高性能</div>
+                                <div class="text-sm text-gray-600">无需奇偶性检查，直接返回区间内ID</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-check-circle text-green-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">完全隔离</div>
+                                <div class="text-sm text-gray-600">奇偶服务器使用完全不同的区间</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-check-circle text-green-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">容错支持</div>
+                                <div class="text-sm text-gray-600">单服务器下线时可代理全部区间</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h4 class="text-lg font-medium text-red-600 mb-4">❌ 奇偶分离（旧方案）</h4>
+                    <div class="space-y-3">
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-times-circle text-red-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">50% ID浪费</div>
+                                <div class="text-sm text-gray-600">同一区间内只能使用一半的ID</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-times-circle text-red-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">性能损耗</div>
+                                <div class="text-sm text-gray-600">每次生成ID都需要奇偶性检查</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-times-circle text-red-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">号段消耗快</div>
+                                <div class="text-sm text-gray-600">由于ID浪费，号段消耗速度翻倍</div>
+                            </div>
+                        </div>
+                        <div class="flex items-start space-x-3">
+                            <i class="fas fa-times-circle text-red-500 mt-1"></i>
+                            <div>
+                                <div class="font-medium">复杂度高</div>
+                                <div class="text-sm text-gray-600">需要额外的奇偶性判断和跳过逻辑</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

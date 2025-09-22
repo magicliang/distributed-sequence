@@ -107,14 +107,29 @@ public interface IdSegmentRepository extends JpaRepository<IdSegment, Long> {
     @Transactional
     @Query("DELETE FROM IdSegment s WHERE s.timeKey < :expiredTimeKey")
     int deleteExpiredSegments(@Param("expiredTimeKey") String expiredTimeKey);
-
+    
     /**
-     * 根据业务类型查找所有号段
+     * 原子性更新最大值到指定值（奇偶区间错开模式）
      */
-    List<IdSegment> findByBusinessType(String businessType);
-
+    @Modifying
+    @Transactional
+    @Query("UPDATE IdSegment s SET s.maxValue = :maxValue, s.updatedTime = CURRENT_TIMESTAMP " +
+           "WHERE s.businessType = :businessType AND s.timeKey = :timeKey AND s.shardType = :shardType")
+    int updateMaxValueAtomicallyWithValue(@Param("businessType") String businessType,
+                                         @Param("timeKey") String timeKey,
+                                         @Param("shardType") Integer shardType,
+                                         @Param("maxValue") Long maxValue);
+    
     /**
-     * 根据业务类型和时间键查找号段
+     * 原子性更新最大值和步长到指定值（奇偶区间错开模式，支持步长变更）
      */
-    List<IdSegment> findByBusinessTypeAndTimeKey(String businessType, String timeKey);
+    @Modifying
+    @Transactional
+    @Query("UPDATE IdSegment s SET s.maxValue = :maxValue, s.stepSize = :stepSize, s.updatedTime = CURRENT_TIMESTAMP " +
+           "WHERE s.businessType = :businessType AND s.timeKey = :timeKey AND s.shardType = :shardType")
+    int updateMaxValueAndStepSizeAtomicallyWithValue(@Param("businessType") String businessType,
+                                                    @Param("timeKey") String timeKey,
+                                                    @Param("shardType") Integer shardType,
+                                                    @Param("maxValue") Long maxValue,
+                                                    @Param("stepSize") Integer stepSize);
 }
