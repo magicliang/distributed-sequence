@@ -458,25 +458,17 @@ public class IdGeneratorService {
         long intervalIndex = (maxValue - 1) / stepSize;
         
         if (shardType == 1) {
-            // 奇数服务器：使用奇数区间
-            // 第0个区间: [1, stepSize]
-            // 第1个区间: [2*stepSize+1, 3*stepSize]
-            // 第2个区间: [4*stepSize+1, 5*stepSize]
-            if (intervalIndex % 2 == 0) {
-                return intervalIndex * stepSize + 1;
-            } else {
-                return (intervalIndex + 1) * stepSize + 1;
-            }
+            // 奇数服务器：使用偶数索引区间 (0, 2, 4, ...)
+            // 区间0: [1, stepSize]
+            // 区间2: [2*stepSize+1, 3*stepSize]
+            // 区间4: [4*stepSize+1, 5*stepSize]
+            return intervalIndex * stepSize + 1;
         } else {
-            // 偶数服务器：使用偶数区间
-            // 第0个区间: [stepSize+1, 2*stepSize]
-            // 第1个区间: [3*stepSize+1, 4*stepSize]
-            // 第2个区间: [5*stepSize+1, 6*stepSize]
-            if (intervalIndex % 2 == 0) {
-                return stepSize + 1;
-            } else {
-                return (intervalIndex + 1) * stepSize + 1;
-            }
+            // 偶数服务器：使用奇数索引区间 (1, 3, 5, ...)
+            // 区间1: [stepSize+1, 2*stepSize]
+            // 区间3: [3*stepSize+1, 4*stepSize]
+            // 区间5: [5*stepSize+1, 6*stepSize]
+            return intervalIndex * stepSize + 1;
         }
     }
 
@@ -918,10 +910,10 @@ public class IdGeneratorService {
      */
     private long calculateInitialMaxValue(int stepSize, int shardType) {
         if (shardType == 1) {
-            // 奇数服务器：第一个区间 [1, stepSize]
+            // 奇数服务器：使用区间0 [1, stepSize]
             return stepSize;
         } else {
-            // 偶数服务器：第一个区间 [stepSize+1, 2*stepSize]
+            // 偶数服务器：使用区间1 [stepSize+1, 2*stepSize]
             return 2L * stepSize;
         }
     }
@@ -1053,10 +1045,25 @@ public class IdGeneratorService {
                             businessType, timeKey, shardType, nextMaxValue);
                 }
             } else {
-                // 号段不存在，使用初始值
+                // 号段不存在，先创建记录
                 long initialMaxValue = calculateInitialMaxValue(newStepSize, shardType);
-                updateCount = idSegmentRepository.updateMaxValueAtomicallyWithValue(
-                        businessType, timeKey, shardType, initialMaxValue);
+                IdSegment newSegment = IdSegment.builder()
+                        .businessType(businessType)
+                        .timeKey(timeKey)
+                        .shardType(shardType)
+                        .maxValue(initialMaxValue)
+                        .stepSize(newStepSize)
+                        .build();
+                
+                try {
+                    idSegmentRepository.save(newSegment);
+                    updateCount = 1; // 创建成功
+                    log.info("创建新号段: {} -> maxValue: {}, stepSize: {}", 
+                            buildSegmentKey(businessType, timeKey), initialMaxValue, newStepSize);
+                } catch (Exception e) {
+                    log.error("创建号段失败: " + buildSegmentKey(businessType, timeKey), e);
+                    updateCount = 0;
+                }
             }
             
             if (updateCount > 0) {
