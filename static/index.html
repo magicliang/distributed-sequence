@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分布式ID生成器 - 奇偶分片高可用方案</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <div id="app">
+        <!-- 头部导航 -->
+        <header class="bg-white shadow-sm border-b">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-4">
+                    <div class="flex items-center">
+                        <i class="fas fa-cogs text-blue-600 text-2xl mr-3"></i>
+                        <h1 class="text-2xl font-bold text-gray-900">分布式ID生成器</h1>
+                        <span class="ml-3 px-2 py-1 bg-blue-100 text-blue-800 text-xs rounded-full">奇偶分片高可用</span>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <button @click="refreshStatus" class="text-gray-600 hover:text-blue-600">
+                            <i class="fas fa-sync-alt"></i>
+                        </button>
+                        <div class="flex items-center">
+                            <div class="w-2 h-2 bg-green-400 rounded-full mr-2"></div>
+                            <span class="text-sm text-gray-600">服务正常</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <!-- 服务器状态卡片 -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-2 bg-blue-100 rounded-lg">
+                            <i class="fas fa-server text-blue-600"></i>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">服务器类型</p>
+                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.serverTypeDesc || '加载中...' }}</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-2 bg-green-100 rounded-lg">
+                            <i class="fas fa-database text-green-600"></i>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">偶数服务器</p>
+                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.evenServerCount || 0 }} 台在线</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-2 bg-purple-100 rounded-lg">
+                            <i class="fas fa-database text-purple-600"></i>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">奇数服务器</p>
+                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.oddServerCount || 0 }} 台在线</p>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="bg-white rounded-lg shadow p-6">
+                    <div class="flex items-center">
+                        <div class="p-2 bg-yellow-100 rounded-lg">
+                            <i class="fas fa-memory text-yellow-600"></i>
+                        </div>
+                        <div class="ml-4">
+                            <p class="text-sm font-medium text-gray-600">号段缓存</p>
+                            <p class="text-lg font-semibold text-gray-900">{{ serverStatus.segmentBufferCount || 0 }} 个</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                <!-- ID生成器面板 -->
+                <div class="bg-white rounded-lg shadow">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                            <i class="fas fa-plus-circle text-blue-600 mr-2"></i>
+                            ID生成器
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <form @submit.prevent="generateIds" class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-700 mb-2">业务类型</label>
+                                <input v-model="idRequest.businessType" 
+                                       type="text" 
+                                       placeholder="例如: order, user, product"
+                                       class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                            </div>
+                            
+                            <div class="grid grid-cols-2 gap-4">
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">生成数量</label>
+                                    <input v-model.number="idRequest.count" 
+                                           type="number" 
+                                           min="1" 
+                                           max="10000"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                                <div>
+                                    <label class="block text-sm font-medium text-gray-700 mb-2">时间键（可选）</label>
+                                    <input v-model="idRequest.timeKey" 
+                                           type="text" 
+                                           placeholder="例如: 20231215"
+                                           class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                </div>
+                            </div>
+
+                            <!-- 高级选项 -->
+                            <div class="border-t pt-4">
+                                <button type="button" 
+                                        @click="showAdvanced = !showAdvanced"
+                                        class="flex items-center text-sm text-blue-600 hover:text-blue-800">
+                                    <i :class="showAdvanced ? 'fas fa-chevron-up' : 'fas fa-chevron-down'" class="mr-1"></i>
+                                    高级选项
+                                </button>
+                                
+                                <div v-show="showAdvanced" class="mt-4 space-y-4">
+                                    <div class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-2">强制分片类型</label>
+                                            <select v-model="idRequest.forceShardType" 
+                                                    class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                                <option :value="null">自动选择</option>
+                                                <option :value="0">偶数分片</option>
+                                                <option :value="1">奇数分片</option>
+                                            </select>
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-2">自定义步长</label>
+                                            <input v-model.number="idRequest.customStepSize" 
+                                                   type="number" 
+                                                   min="100" 
+                                                   max="10000"
+                                                   placeholder="默认1000"
+                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="flex items-center">
+                                            <input v-model="idRequest.includeRouting" 
+                                                   type="checkbox" 
+                                                   class="rounded border-gray-300 text-blue-600 focus:ring-blue-500">
+                                            <span class="ml-2 text-sm text-gray-700">包含路由信息</span>
+                                        </label>
+                                    </div>
+                                    
+                                    <div v-show="idRequest.includeRouting" class="grid grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-2">分库数量</label>
+                                            <input v-model.number="idRequest.shardDbCount" 
+                                                   type="number" 
+                                                   min="1" 
+                                                   max="1024"
+                                                   placeholder="例如: 4"
+                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-2">分表数量</label>
+                                            <input v-model.number="idRequest.shardTableCount" 
+                                                   type="number" 
+                                                   min="1" 
+                                                   max="1024"
+                                                   placeholder="例如: 8"
+                                                   class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <button type="submit" 
+                                    :disabled="loading || !idRequest.businessType"
+                                    class="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                <i v-if="loading" class="fas fa-spinner fa-spin mr-2"></i>
+                                <i v-else class="fas fa-magic mr-2"></i>
+                                {{ loading ? '生成中...' : '生成ID' }}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- 生成结果面板 -->
+                <div class="bg-white rounded-lg shadow">
+                    <div class="px-6 py-4 border-b border-gray-200">
+                        <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                            <i class="fas fa-list-ol text-green-600 mr-2"></i>
+                            生成结果
+                        </h2>
+                    </div>
+                    <div class="p-6">
+                        <div v-if="!lastResponse" class="text-center text-gray-500 py-8">
+                            <i class="fas fa-info-circle text-4xl mb-4"></i>
+                            <p>请在左侧输入参数并点击"生成ID"按钮</p>
+                        </div>
+                        
+                        <div v-else class="space-y-4">
+                            <!-- 基本信息 -->
+                            <div class="bg-gray-50 rounded-lg p-4">
+                                <div class="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <span class="font-medium text-gray-600">业务类型:</span>
+                                        <span class="ml-2 text-gray-900">{{ lastResponse.businessType }}</span>
+                                    </div>
+                                    <div>
+                                        <span class="font-medium text-gray-600">时间键:</span>
+                                        <span class="ml-2 text-gray-900">{{ lastResponse.timeKey }}</span>
+                                    </div>
+                                    <div>
+                                        <span class="font-medium text-gray-600">分片类型:</span>
+                                        <span class="ml-2 text-gray-900">{{ getShardTypeDesc(lastResponse.shardType) }}</span>
+                                    </div>
+                                    <div>
+                                        <span class="font-medium text-gray-600">生成数量:</span>
+                                        <span class="ml-2 text-gray-900">{{ lastResponse.ids.length }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- 路由信息 -->
+                            <div v-if="lastResponse.routingInfo" class="bg-blue-50 rounded-lg p-4">
+                                <h4 class="font-medium text-blue-900 mb-2">路由信息</h4>
+                                <div class="grid grid-cols-2 gap-4 text-sm">
+                                    <div>
+                                        <span class="font-medium text-blue-600">数据库索引:</span>
+                                        <span class="ml-2 text-blue-900">{{ lastResponse.routingInfo.dbIndex }}</span>
+                                    </div>
+                                    <div>
+                                        <span class="font-medium text-blue-600">表索引:</span>
+                                        <span class="ml-2 text-blue-900">{{ lastResponse.routingInfo.tableIndex }}</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- ID列表 -->
+                            <div>
+                                <div class="flex justify-between items-center mb-2">
+                                    <h4 class="font-medium text-gray-900">生成的ID列表</h4>
+                                    <button @click="copyIds" 
+                                            class="text-sm text-blue-600 hover:text-blue-800">
+                                        <i class="fas fa-copy mr-1"></i>复制
+                                    </button>
+                                </div>
+                                <div class="bg-gray-900 text-green-400 rounded-lg p-4 font-mono text-sm max-h-64 overflow-y-auto">
+                                    <div v-for="(id, index) in lastResponse.ids" :key="index" class="py-1">
+                                        {{ id }}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 历史记录 -->
+            <div v-if="history.length > 0" class="mt-8 bg-white rounded-lg shadow">
+                <div class="px-6 py-4 border-b border-gray-200">
+                    <h2 class="text-lg font-semibold text-gray-900 flex items-center">
+                        <i class="fas fa-history text-gray-600 mr-2"></i>
+                        生成历史
+                    </h2>
+                </div>
+                <div class="p-6">
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-gray-200">
+                            <thead class="bg-gray-50">
+                                <tr>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">时间</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">业务类型</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">数量</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">分片类型</th>
+                                    <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID范围</th>
+                                </tr>
+                            </thead>
+                            <tbody class="bg-white divide-y divide-gray-200">
+                                <tr v-for="(record, index) in history.slice(0, 10)" :key="index">
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        {{ formatTime(record.timestamp) }}
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        {{ record.businessType }}
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        {{ record.ids.length }}
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        <span :class="record.shardType === 1 ? 'bg-purple-100 text-purple-800' : 'bg-green-100 text-green-800'" 
+                                              class="px-2 py-1 text-xs rounded-full">
+                                            {{ getShardTypeDesc(record.shardType) }}
+                                        </span>
+                                    </td>
+                                    <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                                        {{ Math.min(...record.ids) }} - {{ Math.max(...record.ids) }}
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 错误提示 -->
+        <div v-if="error" 
+             class="fixed bottom-4 right-4 bg-red-500 text-white px-6 py-3 rounded-lg shadow-lg">
+            <div class="flex items-center">
+                <i class="fas fa-exclamation-triangle mr-2"></i>
+                {{ error }}
+                <button @click="error = ''" class="ml-4 text-white hover:text-gray-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+
+        <!-- 成功提示 -->
+        <div v-if="success" 
+             class="fixed bottom-4 right-4 bg-green-500 text-white px-6 py-3 rounded-lg shadow-lg">
+            <div class="flex items-center">
+                <i class="fas fa-check-circle mr-2"></i>
+                {{ success }}
+                <button @click="success = ''" class="ml-4 text-white hover:text-gray-200">
+                    <i class="fas fa-times"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

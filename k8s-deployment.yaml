@@ -1,0 +1,250 @@
+# 偶数服务器部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: id-generator-even
+  labels:
+    app: id-generator
+    shard-type: even
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: id-generator
+      shard-type: even
+  template:
+    metadata:
+      labels:
+        app: id-generator
+        shard-type: even
+    spec:
+      containers:
+      - name: id-generator
+        image: id-generator:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ID_SERVER_TYPE
+          value: "0"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "mysql"
+        - name: MYSQL_HOST
+          value: "11.142.154.110"
+        - name: MYSQL_PORT
+          value: "3306"
+        - name: MYSQL_DATABASE
+          value: "czyll8wg"
+        - name: MYSQL_USERNAME
+          value: "with_ygpsfnsdmsasjvcz"
+        - name: MYSQL_PASSWORD
+          value: "9j4srZ)$wavpqm"
+        - name: ID_STEP_SIZE
+          value: "1000"
+        - name: ID_SEGMENT_THRESHOLD
+          value: "0.1"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/id/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/id/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# 奇数服务器部署
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: id-generator-odd
+  labels:
+    app: id-generator
+    shard-type: odd
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: id-generator
+      shard-type: odd
+  template:
+    metadata:
+      labels:
+        app: id-generator
+        shard-type: odd
+    spec:
+      containers:
+      - name: id-generator
+        image: id-generator:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: ID_SERVER_TYPE
+          value: "1"
+        - name: SPRING_PROFILES_ACTIVE
+          value: "mysql"
+        - name: MYSQL_HOST
+          value: "11.142.154.110"
+        - name: MYSQL_PORT
+          value: "3306"
+        - name: MYSQL_DATABASE
+          value: "czyll8wg"
+        - name: MYSQL_USERNAME
+          value: "with_ygpsfnsdmsasjvcz"
+        - name: MYSQL_PASSWORD
+          value: "9j4srZ)$wavpqm"
+        - name: ID_STEP_SIZE
+          value: "1000"
+        - name: ID_SEGMENT_THRESHOLD
+          value: "0.1"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /api/id/health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /api/id/health
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+
+---
+# 服务配置
+apiVersion: v1
+kind: Service
+metadata:
+  name: id-generator-service
+  labels:
+    app: id-generator
+spec:
+  selector:
+    app: id-generator
+  ports:
+  - name: http
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP
+
+---
+# 负载均衡服务
+apiVersion: v1
+kind: Service
+metadata:
+  name: id-generator-lb
+  labels:
+    app: id-generator
+spec:
+  selector:
+    app: id-generator
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  type: LoadBalancer
+
+---
+# 配置映射
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: id-generator-config
+data:
+  application.yml: |
+    server:
+      port: 8080
+    spring:
+      profiles:
+        active: mysql
+      datasource:
+        url: jdbc:mysql://${MYSQL_HOST}:${MYSQL_PORT}/${MYSQL_DATABASE}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai
+        username: ${MYSQL_USERNAME}
+        password: ${MYSQL_PASSWORD}
+        driver-class-name: com.mysql.cj.jdbc.Driver
+      jpa:
+        hibernate:
+          ddl-auto: update
+        show-sql: false
+    id:
+      generator:
+        server:
+          type: ${ID_SERVER_TYPE}
+        step:
+          size: ${ID_STEP_SIZE}
+        segment:
+          threshold: ${ID_SEGMENT_THRESHOLD}
+
+---
+# 水平自动扩缩容
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: id-generator-hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: id-generator-even
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+
+---
+# 网络策略
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: id-generator-network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app: id-generator
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: client
+    ports:
+    - protocol: TCP
+      port: 8080
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: mysql
+    ports:
+    - protocol: TCP
+      port: 3306

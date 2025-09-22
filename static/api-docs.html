@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>分布式ID生成器 - API文档</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/themes/prism-tomorrow.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/components/prism-core.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prism/1.24.1/plugins/autoloader/prism-autoloader.min.js"></script>
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- 导航栏 -->
+    <nav class="bg-white shadow-sm border-b sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center py-4">
+                <div class="flex items-center">
+                    <i class="fas fa-book text-blue-600 text-2xl mr-3"></i>
+                    <h1 class="text-2xl font-bold text-gray-900">API文档</h1>
+                </div>
+                <div class="flex items-center space-x-4">
+                    <a href="/" class="text-blue-600 hover:text-blue-800">
+                        <i class="fas fa-home mr-1"></i>返回首页
+                    </a>
+                    <a href="#" onclick="window.print()" class="text-gray-600 hover:text-gray-800">
+                        <i class="fas fa-print mr-1"></i>打印
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+            <!-- 侧边栏导航 -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow sticky top-24">
+                    <div class="p-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">目录</h3>
+                        <nav class="space-y-2">
+                            <a href="#overview" class="block text-sm text-blue-600 hover:text-blue-800">概述</a>
+                            <a href="#authentication" class="block text-sm text-blue-600 hover:text-blue-800">认证</a>
+                            <a href="#generate-ids" class="block text-sm text-blue-600 hover:text-blue-800">生成ID</a>
+                            <a href="#single-id" class="block text-sm text-blue-600 hover:text-blue-800">获取单个ID</a>
+                            <a href="#batch-generate" class="block text-sm text-blue-600 hover:text-blue-800">批量生成</a>
+                            <a href="#server-status" class="block text-sm text-blue-600 hover:text-blue-800">服务器状态</a>
+                            <a href="#health-check" class="block text-sm text-blue-600 hover:text-blue-800">健康检查</a>
+                            <a href="#cleanup" class="block text-sm text-blue-600 hover:text-blue-800">清理过期数据</a>
+                            <a href="#error-codes" class="block text-sm text-blue-600 hover:text-blue-800">错误码</a>
+                            <a href="#examples" class="block text-sm text-blue-600 hover:text-blue-800">示例代码</a>
+                        </nav>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 主要内容 -->
+            <div class="lg:col-span-3 space-y-8">
+                <!-- 概述 -->
+                <section id="overview" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">API概述</h2>
+                        <div class="prose max-w-none">
+                            <p class="text-gray-600 mb-4">
+                                分布式ID生成器提供RESTful API接口，支持高性能、高可用的全局唯一ID生成服务。
+                                采用奇偶分片策略，确保ID的唯一性和系统的高可用性。
+                            </p>
+                            <div class="bg-blue-50 border-l-4 border-blue-400 p-4 mb-4">
+                                <div class="flex">
+                                    <i class="fas fa-info-circle text-blue-400 mt-1 mr-2"></i>
+                                    <div>
+                                        <p class="text-blue-800 font-medium">基础信息</p>
+                                        <p class="text-blue-700 text-sm">
+                                            Base URL: <code>http://localhost:8080</code><br>
+                                            Content-Type: <code>application/json</code><br>
+                                            字符编码: <code>UTF-8</code>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 认证 -->
+                <section id="authentication" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">认证方式</h2>
+                        <p class="text-gray-600 mb-4">
+                            当前版本暂不需要认证，所有API接口均可直接访问。生产环境建议配置API Key或JWT认证。
+                        </p>
+                        <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+                            <div class="flex">
+                                <i class="fas fa-exclamation-triangle text-yellow-400 mt-1 mr-2"></i>
+                                <div>
+                                    <p class="text-yellow-800 font-medium">安全提醒</p>
+                                    <p class="text-yellow-700 text-sm">
+                                        生产环境请务必配置适当的认证和授权机制，限制API访问权限。
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 生成ID -->
+                <section id="generate-ids" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">生成ID</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-800">
+                                POST
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/generate</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">请求参数</h3>
+                        <div class="overflow-x-auto mb-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">参数名</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">必填</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">说明</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">businessType</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">String</td>
+                                        <td class="px-6 py-4 text-sm text-red-600">是</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">业务类型，如：order, user, product</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">count</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">生成数量，默认1，最大10000</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">timeKey</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">String</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">时间键，格式：YYYYMMDD，默认当前日期</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">includeRouting</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Boolean</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">是否包含路由信息，默认false</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">shardDbCount</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">分库数量，用于路由计算</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">shardTableCount</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">分表数量，用于路由计算</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">customStepSize</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">自定义步长，默认1000</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">forceShardType</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-600">否</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">强制分片类型：0-偶数，1-奇数</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">请求示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "businessType": "order",
+  "count": 10,
+  "timeKey": "20231215",
+  "includeRouting": true,
+  "shardDbCount": 4,
+  "shardTableCount": 8,
+  "customStepSize": 1000,
+  "forceShardType": 1
+}</code></pre>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3 mt-6">响应示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "success": true,
+  "data": {
+    "ids": [1001, 1003, 1005, 1007, 1009, 1011, 1013, 1015, 1017, 1019],
+    "businessType": "order",
+    "timeKey": "20231215",
+    "shardType": 1,
+    "serverId": "server-001",
+    "routingInfo": {
+      "dbIndex": 1,
+      "tableIndex": 3,
+      "shardDbCount": 4,
+      "shardTableCount": 8,
+      "routingKey": 1001
+    },
+    "timestamp": 1702627200000
+  },
+  "message": "ID生成成功"
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 获取单个ID -->
+                <section id="single-id" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">获取单个ID</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                                GET
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/single/{businessType}</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">路径参数</h3>
+                        <div class="overflow-x-auto mb-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">参数名</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">说明</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">businessType</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">String</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">业务类型</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">请求示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-bash">curl -X GET "http://localhost:8080/api/id/single/order"</code></pre>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3 mt-6">响应示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "success": true,
+  "id": 1001,
+  "businessType": "order",
+  "timeKey": "20231215",
+  "shardType": "奇数分片",
+  "serverId": "server-001"
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 批量生成 -->
+                <section id="batch-generate" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">批量生成ID</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                                GET
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/generate/{businessType}</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">查询参数</h3>
+                        <div class="overflow-x-auto mb-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">参数名</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">默认值</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">说明</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">count</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">1</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">生成数量</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">timeKey</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">String</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">当前日期</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">时间键</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">includeRouting</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Boolean</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">false</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">包含路由信息</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">shardDbCount</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">-</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">分库数量</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">shardTableCount</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">Integer</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">-</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">分表数量</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">请求示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-bash">curl -X GET "http://localhost:8080/api/id/generate/order?count=5&includeRouting=true&shardDbCount=4"</code></pre>
+                    </div>
+                </section>
+
+                <!-- 服务器状态 -->
+                <section id="server-status" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">服务器状态</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                                GET
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/status</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">响应示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "success": true,
+  "data": {
+    "serverId": "server-001",
+    "serverType": 0,
+    "serverTypeDesc": "偶数服务器",
+    "segmentBufferCount": 5,
+    "evenServerCount": 2,
+    "oddServerCount": 2,
+    "timestamp": 1702627200000
+  },
+  "message": "获取状态成功"
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 健康检查 -->
+                <section id="health-check" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">健康检查</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
+                                GET
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/health</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">响应示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "status": "UP",
+  "service": "ID Generator",
+  "timestamp": 1702627200000
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 清理过期数据 -->
+                <section id="cleanup" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">清理过期数据</h2>
+                        <div class="mb-4">
+                            <span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-red-100 text-red-800">
+                                DELETE
+                            </span>
+                            <code class="ml-2 text-lg font-mono">/api/id/segments/expired/{timeKey}</code>
+                        </div>
+                        
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">路径参数</h3>
+                        <div class="overflow-x-auto mb-4">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">参数名</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">类型</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">说明</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">timeKey</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">String</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">过期时间键，删除小于此时间的数据</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3">请求示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-bash">curl -X DELETE "http://localhost:8080/api/id/segments/expired/20231130"</code></pre>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3 mt-6">响应示例</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "success": true,
+  "deletedCount": 15,
+  "message": "清理完成"
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 错误码 -->
+                <section id="error-codes" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">错误码说明</h2>
+                        <div class="overflow-x-auto">
+                            <table class="min-w-full divide-y divide-gray-200">
+                                <thead class="bg-gray-50">
+                                    <tr>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">HTTP状态码</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">错误类型</th>
+                                        <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">说明</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="bg-white divide-y divide-gray-200">
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">200</td>
+                                        <td class="px-6 py-4 text-sm text-green-600">成功</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">请求处理成功</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">400</td>
+                                        <td class="px-6 py-4 text-sm text-red-600">参数错误</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">请求参数不合法或缺失必填参数</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">404</td>
+                                        <td class="px-6 py-4 text-sm text-red-600">资源不存在</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">请求的API端点不存在</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">500</td>
+                                        <td class="px-6 py-4 text-sm text-red-600">服务器错误</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">服务器内部错误，如数据库连接失败</td>
+                                    </tr>
+                                    <tr>
+                                        <td class="px-6 py-4 text-sm font-mono text-gray-900">503</td>
+                                        <td class="px-6 py-4 text-sm text-red-600">服务不可用</td>
+                                        <td class="px-6 py-4 text-sm text-gray-500">服务暂时不可用，如系统维护</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <h3 class="text-lg font-semibold text-gray-900 mb-3 mt-6">错误响应格式</h3>
+                        <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-json">{
+  "success": false,
+  "message": "业务类型不能为空",
+  "error": "ValidationException",
+  "timestamp": 1702627200000
+}</code></pre>
+                    </div>
+                </section>
+
+                <!-- 示例代码 -->
+                <section id="examples" class="bg-white rounded-lg shadow">
+                    <div class="p-6">
+                        <h2 class="text-2xl font-bold text-gray-900 mb-4">示例代码</h2>
+                        
+                        <div class="space-y-6">
+                            <!-- Java示例 -->
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-900 mb-3">Java (Spring Boot)</h3>
+                                <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-java">@RestController
+public class OrderController {
+    
+    @Autowired
+    private RestTemplate restTemplate;
+    
+    @PostMapping("/orders")
+    public ResponseEntity<?> createOrder(@RequestBody OrderRequest request) {
+        // 生成订单ID
+        IdRequest idRequest = new IdRequest();
+        idRequest.setBusinessType("order");
+        idRequest.setCount(1);
+        
+        ResponseEntity<IdResponse> response = restTemplate.postForEntity(
+            "http://id-generator:8080/api/id/generate", 
+            idRequest, 
+            IdResponse.class
+        );
+        
+        if (response.getBody().isSuccess()) {
+            Long orderId = response.getBody().getData().getIds().get(0);
+            // 使用生成的ID创建订单
+            Order order = new Order();
+            order.setId(orderId);
+            // ... 其他业务逻辑
+            return ResponseEntity.ok(order);
+        }
+        
+        return ResponseEntity.status(500).body("ID生成失败");
+    }
+}</code></pre>
+                            </div>
+
+                            <!-- Go示例 -->
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-900 mb-3">Go</h3>
+                                <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-go">package main
+
+import (
+    "bytes"
+    "encoding/json"
+    "fmt"
+    "io/ioutil"
+    "net/http"
+)
+
+type IdGenerator struct {
+    BaseURL string
+}
+
+type GenerateRequest struct {
+    BusinessType    string `json:"businessType"`
+    Count          int    `json:"count"`
+    TimeKey        string `json:"timeKey,omitempty"`
+    IncludeRouting bool   `json:"includeRouting,omitempty"`
+    ShardDbCount   int    `json:"shardDbCount,omitempty"`
+    ShardTableCount int   `json:"shardTableCount,omitempty"`
+}
+
+type GenerateResponse struct {
+    Success bool `json:"success"`
+    Data    struct {
+        IDs []int64 `json:"ids"`
+    } `json:"data"`
+    Message string `json:"message"`
+}
+
+func NewIdGenerator(baseURL string) *IdGenerator {
+    if baseURL == "" {
+        baseURL = "http://localhost:8080"
+    }
+    return &IdGenerator{BaseURL: baseURL}
+}
+
+func (ig *IdGenerator) GenerateIds(req GenerateRequest) ([]int64, error) {
+    jsonData, err := json.Marshal(req)
+    if err != nil {
+        return nil, err
+    }
+    
+    resp, err := http.Post(ig.BaseURL+"/api/id/generate", "application/json", bytes.NewBuffer(jsonData))
+    if err != nil {
+        return nil, err
+    }
+    defer resp.Body.Close()
+    
+    body, err := ioutil.ReadAll(resp.Body)
+    if err != nil {
+        return nil, err
+    }
+    
+    var result GenerateResponse
+    err = json.Unmarshal(body, &result)
+    if err != nil {
+        return nil, err
+    }
+    
+    if !result.Success {
+        return nil, fmt.Errorf(result.Message)
+    }
+    
+    return result.Data.IDs, nil
+}
+
+// 使用示例
+func main() {
+    generator := NewIdGenerator("")
+    
+    // 生成订单ID
+    orderIds, err := generator.GenerateIds(GenerateRequest{
+        BusinessType: "order",
+        Count:       10,
+    })
+    if err != nil {
+        fmt.Printf("错误: %v\n", err)
+        return
+    }
+    fmt.Printf("订单ID: %v\n", orderIds)
+}</code></pre>
+                            </div>
+
+                            <!-- JavaScript示例 -->
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-900 mb-3">JavaScript (Node.js)</h3>
+                                <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-javascript">const axios = require('axios');
+
+class IdGenerator {
+    constructor(baseUrl = 'http://localhost:8080') {
+        this.baseUrl = baseUrl;
+    }
+    
+    async generateIds(businessType, options = {}) {
+        const url = `${this.baseUrl}/api/id/generate`;
+        const data = {
+            businessType,
+            count: 1,
+            ...options
+        };
+        
+        try {
+            const response = await axios.post(url, data);
+            if (response.data.success) {
+                return response.data.data.ids;
+            } else {
+                throw new Error(response.data.message);
+            }
+        } catch (error) {
+            throw new Error(`ID生成失败: ${error.message}`);
+        }
+    }
+    
+    async getSingleId(businessType) {
+        const url = `${this.baseUrl}/api/id/single/${businessType}`;
+        
+        try {
+            const response = await axios.get(url);
+            if (response.data.success) {
+                return response.data.id;
+            } else {
+                throw new Error(response.data.message);
+            }
+        } catch (error) {
+            throw new Error(`ID生成失败: ${error.message}`);
+        }
+    }
+    
+    async getServerStatus() {
+        const url = `${this.baseUrl}/api/id/status`;
+        
+        try {
+            const response = await axios.get(url);
+            if (response.data.success) {
+                return response.data.data;
+            } else {
+                throw new Error(response.data.message);
+            }
+        } catch (error) {
+            throw new Error(`获取状态失败: ${error.message}`);
+        }
+    }
+}
+
+// 使用示例
+(async () => {
+    const idGen = new IdGenerator();
+    
+    try {
+        // 生成单个订单ID
+        const orderId = await idGen.getSingleId('order');
+        console.log(`订单ID: ${orderId}`);
+        
+        // 批量生成用户ID
+        const userIds = await idGen.generateIds('user', { count: 10 });
+        console.log(`用户ID列表: ${userIds}`);
+        
+        // 获取服务器状态
+        const status = await idGen.getServerStatus();
+        console.log(`服务器状态: ${JSON.stringify(status, null, 2)}`);
+        
+    } catch (error) {
+        console.error('错误:', error.message);
+    }
+})();</code></pre>
+                            </div>
+
+                            <!-- cURL示例 -->
+                            <div>
+                                <h3 class="text-lg font-semibold text-gray-900 mb-3">cURL</h3>
+                                <pre class="bg-gray-900 text-green-400 p-4 rounded-lg overflow-x-auto"><code class="language-bash"># 生成单个ID
+curl -X GET "http://localhost:8080/api/id/single/order"
+
+# 批量生成ID
+curl -X POST "http://localhost:8080/api/id/generate" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "businessType": "order",
+    "count": 10,
+    "includeRouting": true,
+    "shardDbCount": 4
+  }'
+
+# 获取服务器状态
+curl -X GET "http://localhost:8080/api/id/status"
+
+# 健康检查
+curl -X GET "http://localhost:8080/api/id/health"
+
+# 清理过期数据
+curl -X DELETE "http://localhost:8080/api/id/segments/expired/20231130"</code></pre>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </div>
+
+    <!-- 返回顶部按钮 -->
+    <button onclick="window.scrollTo({top: 0, behavior: 'smooth'})" 
+            class="fixed bottom-8 right-8 bg-blue-600 text-white p-3 rounded-full shadow-lg hover:bg-blue-700 transition-colors">
+        <i class="fas fa-arrow-up"></i>
+    </button>
+
+    <script>
+        // 平滑滚动到锚点
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+
+        // 高亮当前导航项
+        window.addEventListener('scroll', () => {
+            const sections = document.querySelectorAll('section[id]');
+            const navLinks = document.querySelectorAll('nav a[href^="#"]');
+            
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                const sectionHeight = section.clientHeight;
+                if (window.pageYOffset >= sectionTop - 200) {
+                    current = section.getAttribute('id');
+                }
+            });
+            
+            navLinks.forEach(link => {
+                link.classList.remove('font-bold', 'text-blue-800');
+                if (link.getAttribute('href') === '#' + current) {
+                    link.classList.add('font-bold', 'text-blue-800');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

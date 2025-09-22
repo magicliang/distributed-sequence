@@ -1,0 +1,138 @@
+server:
+  port: 8080
+  servlet:
+    context-path: /
+
+spring:
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:h2}
+  
+  application:
+    name: distributed-id-generator
+  
+  # H2数据库配置（默认）
+  datasource:
+    url: jdbc:h2:mem:idgenerator;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    username: sa
+    password: 
+    driver-class-name: org.h2.Driver
+
+---
+# MySQL生产环境配置
+spring:
+  profiles: mysql
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:11.142.154.110}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:czyll8wg}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:with_ygpsfnsdmsasjvcz}
+    password: ${MYSQL_PASSWORD:9j4srZ)$wavpqm}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20
+      minimum-idle: 5
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+  
+  # JPA配置
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+        format_sql: true
+    open-in-view: false
+
+---
+# MySQL JPA配置
+spring:
+  profiles: mysql
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+        format_sql: true
+    open-in-view: false
+  
+  # H2控制台配置
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+      settings:
+        web-allow-others: true
+
+# ID生成器配置
+id:
+  generator:
+    server:
+      type: ${ID_SERVER_TYPE:0}  # 0-偶数服务器, 1-奇数服务器
+    step:
+      size: ${ID_STEP_SIZE:1000}  # 默认步长
+    segment:
+      threshold: ${ID_SEGMENT_THRESHOLD:0.1}  # 号段刷新阈值
+
+# 监控配置
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# 日志配置
+logging:
+  level:
+    com.distributed.idgenerator: INFO
+    org.springframework.web: INFO
+    org.hibernate.SQL: DEBUG
+    org.hibernate.type.descriptor.sql.BasicBinder: TRACE
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+---
+# MySQL环境配置
+spring:
+  profiles: mysql
+  datasource:
+    url: jdbc:mysql://${MYSQL_HOST:11.142.154.110}:${MYSQL_PORT:3306}/${MYSQL_DATABASE:czyll8wg}?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${MYSQL_USERNAME:with_ygpsfnsdmsasjvcz}
+    password: ${MYSQL_PASSWORD:9j4srZ)$wavpqm}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.MySQL8Dialect
+    show-sql: false
+
+---
+# 开发环境配置
+spring:
+  profiles: dev
+  
+logging:
+  level:
+    com.distributed.idgenerator: DEBUG
+    org.springframework.web: DEBUG
+
+---
+# 生产环境配置
+spring:
+  profiles: prod
+  
+  jpa:
+    show-sql: false
+    
+logging:
+  level:
+    com.distributed.idgenerator: WARN
+    org.springframework.web: WARN
