@@ -467,17 +467,46 @@ public class IdGeneratorService {
      * 从数据库刷新号段
      * 注意：移除了@Transactional注解，因为private方法上的事务注解不会生效
      * 该方法在generateIds()事务中被调用，依赖外层事务管理
+     * 
+     * 支持步长变更：
+     * 1. 检测步长是否发生变化
+     * 2. 如果步长变化，同时更新maxValue和stepSize
+     * 3. 如果步长未变化，仅更新maxValue
      */
     private boolean refreshSegmentFromDB(SegmentBuffer buffer, String businessType, 
                                          String timeKey, IdRequest request) {
         try {
             int shardType = buffer.getShardType();
-            int stepSize = request.getCustomStepSize() != null ? 
+            int newStepSize = request.getCustomStepSize() != null ? 
                     request.getCustomStepSize() : defaultStepSize;
             
-            // 原子性更新数据库中的最大值
-            int updateCount = idSegmentRepository.updateMaxValueAtomically(
-                    businessType, timeKey, shardType, stepSize);
+            // 获取当前数据库中的号段信息
+            Optional<IdSegment> currentSegment = idSegmentRepository
+                    .getSegmentInfo(businessType, timeKey, shardType);
+            
+            int updateCount = 0;
+            boolean stepSizeChanged = false;
+            
+            if (currentSegment.isPresent()) {
+                IdSegment segment = currentSegment.get();
+                stepSizeChanged = segment.needsStepSizeUpdate(newStepSize);
+                
+                if (stepSizeChanged) {
+                    // 步长发生变化，同时更新最大值和步长
+                    updateCount = idSegmentRepository.updateMaxValueAndStepSizeAtomically(
+                            businessType, timeKey, shardType, newStepSize);
+                    log.info("检测到步长变更: {} 从 {} 变更为 {}", 
+                            buildSegmentKey(businessType, timeKey), segment.getStepSize(), newStepSize);
+                } else {
+                    // 步长未变化，仅更新最大值
+                    updateCount = idSegmentRepository.updateMaxValueAtomically(
+                            businessType, timeKey, shardType, newStepSize);
+                }
+            } else {
+                // 号段不存在，使用普通更新
+                updateCount = idSegmentRepository.updateMaxValueAtomically(
+                        businessType, timeKey, shardType, newStepSize);
+            }
             
             if (updateCount > 0) {
                 // 获取更新后的最大值
@@ -486,7 +515,14 @@ public class IdGeneratorService {
                 
                 if (newMaxValue.isPresent()) {
                     buffer.updateMaxValue(newMaxValue.get());
-                    log.debug("刷新号段成功: {} -> {}", buildSegmentKey(businessType, timeKey), newMaxValue.get());
+                    
+                    if (stepSizeChanged) {
+                        log.info("号段刷新成功（含步长变更）: {} -> {}, 新步长: {}", 
+                                buildSegmentKey(businessType, timeKey), newMaxValue.get(), newStepSize);
+                    } else {
+                        log.debug("号段刷新成功: {} -> {}", 
+                                buildSegmentKey(businessType, timeKey), newMaxValue.get());
+                    }
                     return true;
                 }
             }
@@ -558,5 +594,175 @@ public class IdGeneratorService {
     @Transactional
     public int cleanExpiredSegments(String expiredTimeKey) {
         return idSegmentRepository.deleteExpiredSegments(expiredTimeKey);
+    }
+
+    /**
+     * 步长变更管理
+     * 
+     * @param businessType 业务类型
+     * @param timeKey 时间键（可选）
+     * @param newStepSize 新的步长值
+     * @param preview 是否仅预览
+     * @return 变更结果
+     */
+    @Transactional
+    public Map<String, Object> changeStepSize(String businessType, String timeKey, 
+                                              Integer newStepSize, Boolean preview) {
+        Map<String, Object> result = new HashMap<>();
+        List<Map<String, Object>> affectedSegments = new ArrayList<>();
+        
+        try {
+            // 参数验证
+            if (newStepSize == null || newStepSize <= 0) {
+                throw new IllegalArgumentException("步长必须大于0");
+            }
+            
+            // 查找受影响的号段
+            List<IdSegment> segments;
+            if (timeKey != null && !timeKey.trim().isEmpty()) {
+                // 指定时间键
+                segments = idSegmentRepository.findByBusinessTypeAndTimeKey(businessType, timeKey);
+            } else {
+                // 所有时间键
+                segments = idSegmentRepository.findByBusinessType(businessType);
+            }
+            
+            int changedCount = 0;
+            int skippedCount = 0;
+            
+            for (IdSegment segment : segments) {
+                Map<String, Object> segmentInfo = new HashMap<>();
+                segmentInfo.put("businessType", segment.getBusinessType());
+                segmentInfo.put("timeKey", segment.getTimeKey());
+                segmentInfo.put("shardType", segment.getShardType());
+                segmentInfo.put("currentStepSize", segment.getStepSize());
+                segmentInfo.put("newStepSize", newStepSize);
+                
+                if (segment.needsStepSizeUpdate(newStepSize)) {
+                    segmentInfo.put("action", preview ? "WILL_UPDATE" : "UPDATED");
+                    segmentInfo.put("changed", true);
+                    
+                    if (!preview) {
+                        // 实际执行更新
+                        segment.updateStepSizeIfNeeded(newStepSize);
+                        idSegmentRepository.save(segment);
+                        
+                        // 清理对应的缓存
+                        String segmentKey = buildSegmentKey(segment.getBusinessType(), segment.getTimeKey());
+                        segmentBuffers.remove(segmentKey);
+                        
+                        log.info("步长变更完成: {} 从 {} 变更为 {}", 
+                                segmentKey, segment.getStepSize(), newStepSize);
+                    }
+                    changedCount++;
+                } else {
+                    segmentInfo.put("action", "NO_CHANGE");
+                    segmentInfo.put("changed", false);
+                    skippedCount++;
+                }
+                
+                affectedSegments.add(segmentInfo);
+            }
+            
+            result.put("success", true);
+            result.put("preview", preview);
+            result.put("businessType", businessType);
+            result.put("timeKey", timeKey);
+            result.put("newStepSize", newStepSize);
+            result.put("totalSegments", segments.size());
+            result.put("changedCount", changedCount);
+            result.put("skippedCount", skippedCount);
+            result.put("affectedSegments", affectedSegments);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (preview) {
+                result.put("message", String.format("预览完成：将影响 %d 个号段，其中 %d 个需要变更，%d 个无需变更", 
+                        segments.size(), changedCount, skippedCount));
+            } else {
+                result.put("message", String.format("变更完成：共处理 %d 个号段，其中 %d 个已变更，%d 个无需变更", 
+                        segments.size(), changedCount, skippedCount));
+            }
+            
+        } catch (Exception e) {
+            log.error("步长变更失败", e);
+            result.put("success", false);
+            result.put("message", "步长变更失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
+    }
+
+    /**
+     * 获取当前步长配置信息
+     * 
+     * @param businessType 业务类型（可选）
+     * @return 步长配置信息
+     */
+    public Map<String, Object> getCurrentStepSizeInfo(String businessType) {
+        Map<String, Object> result = new HashMap<>();
+        
+        try {
+            result.put("defaultStepSize", defaultStepSize);
+            result.put("timestamp", System.currentTimeMillis());
+            
+            if (businessType != null && !businessType.trim().isEmpty()) {
+                // 查询指定业务类型的步长信息
+                List<IdSegment> segments = idSegmentRepository.findByBusinessType(businessType);
+                
+                Map<String, List<Map<String, Object>>> groupedSegments = new HashMap<>();
+                
+                for (IdSegment segment : segments) {
+                    String timeKey = segment.getTimeKey();
+                    groupedSegments.computeIfAbsent(timeKey, k -> new ArrayList<>());
+                    
+                    Map<String, Object> segmentInfo = new HashMap<>();
+                    segmentInfo.put("shardType", segment.getShardType());
+                    segmentInfo.put("stepSize", segment.getStepSize());
+                    segmentInfo.put("maxValue", segment.getMaxValue());
+                    segmentInfo.put("updatedTime", segment.getUpdatedTime());
+                    
+                    groupedSegments.get(timeKey).add(segmentInfo);
+                }
+                
+                result.put("businessType", businessType);
+                result.put("segments", groupedSegments);
+                result.put("totalSegments", segments.size());
+            } else {
+                // 查询所有业务类型的统计信息
+                List<String> businessTypes = idSegmentRepository.findAllDistinctBusinessTypes();
+                List<Map<String, Object>> businessTypeStats = new ArrayList<>();
+                
+                for (String bt : businessTypes) {
+                    List<IdSegment> segments = idSegmentRepository.findByBusinessType(bt);
+                    
+                    Map<String, Object> stats = new HashMap<>();
+                    stats.put("businessType", bt);
+                    stats.put("segmentCount", segments.size());
+                    
+                    // 统计不同步长的使用情况
+                    Map<Integer, Integer> stepSizeCount = new HashMap<>();
+                    for (IdSegment segment : segments) {
+                        stepSizeCount.merge(segment.getStepSize(), 1, Integer::sum);
+                    }
+                    stats.put("stepSizeDistribution", stepSizeCount);
+                    
+                    businessTypeStats.add(stats);
+                }
+                
+                result.put("businessTypes", businessTypeStats);
+                result.put("totalBusinessTypes", businessTypes.size());
+            }
+            
+            result.put("success", true);
+            
+        } catch (Exception e) {
+            log.error("查询步长配置失败", e);
+            result.put("success", false);
+            result.put("message", "查询失败: " + e.getMessage());
+            result.put("timestamp", System.currentTimeMillis());
+        }
+        
+        return result;
     }
 }

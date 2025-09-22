@@ -121,4 +121,40 @@ public class IdSegment {
     public boolean isEvenShard() {
         return shardType == 0;
     }
+
+    /**
+     * 检查是否需要更新步长
+     * 
+     * @param newStepSize 新的步长值
+     * @return 如果需要更新返回true，否则返回false
+     */
+    public boolean needsStepSizeUpdate(Integer newStepSize) {
+        return newStepSize != null && !newStepSize.equals(this.stepSize);
+    }
+
+    /**
+     * 安全更新步长
+     * 只有在新步长不同时才进行更新，避免不必要的数据库操作
+     * 
+     * @param newStepSize 新的步长值
+     * @return 如果步长发生了变更返回true，否则返回false
+     */
+    public boolean updateStepSizeIfNeeded(Integer newStepSize) {
+        if (needsStepSizeUpdate(newStepSize)) {
+            this.stepSize = newStepSize;
+            this.updatedTime = LocalDateTime.now();
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * 计算基于新步长的下一个最大值
+     * 
+     * @param newStepSize 新的步长值
+     * @return 下一个最大值
+     */
+    public Long calculateNextMaxValue(Integer newStepSize) {
+        return this.maxValue + (newStepSize != null ? newStepSize : this.stepSize);
+    }
 }

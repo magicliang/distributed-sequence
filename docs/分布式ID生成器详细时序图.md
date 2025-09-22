@@ -781,6 +781,178 @@ sequenceDiagram
 
 ---
 
+---
+
+## 7. 步长变更流程
+
+### 7.1 ASCII版本
+
+```
+管理员        管理接口        业务服务器        内存缓存        数据库        其他服务器实例
+  |              |              |              |              |              |
+  |--步长变更请求-→|              |              |              |              |
+  |              |--参数验证----→|              |              |              |
+  |              |              |--检查业务存在--→|              |              |
+  |              |              |              |--查询当前配置--→|              |
+  |              |              |              |              |←--返回配置----|
+  |              |              |←--配置信息----|              |              |
+  |              |←--验证结果----|              |              |              |
+  |              |              |              |              |              |
+  |--确认执行----→|              |              |              |              |
+  |              |--开启事务----→|              |              |              |
+  |              |              |--原子更新步长--→|              |              |
+  |              |              |              |--UPDATE操作--→|              |
+  |              |              |              |              |←--更新结果----|
+  |              |              |--清理缓存----→|              |              |
+  |              |              |              |--删除相关缓存--→|              |
+  |              |              |              |←--清理完成----|              |
+  |              |              |--提交事务----→|              |              |
+  |              |              |              |--COMMIT-----→|              |
+  |              |              |              |              |←--事务完成----|
+  |              |              |              |              |              |
+  |              |              |--通知其他实例--→|              |              |
+  |              |              |              |              |              |--缓存失效通知--→|
+  |              |              |              |              |              |←--确认收到------|
+  |              |              |              |              |              |
+  |              |←--变更完成----|              |              |              |
+  |←--成功响应----|              |              |              |              |
+  |              |              |              |              |              |
+```
+
+### 7.2 Mermaid版本
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as 管理接口
+    participant BS as 业务服务器
+    participant Cache as 内存缓存
+    participant DB as 数据库
+    participant Other as 其他服务器实例
+
+    Admin->>API: 1. POST /admin/step-size/change
+    Note over Admin,API: 请求参数: businessType, newStepSize, preview, reason
+
+    API->>BS: 2. 参数验证和权限检查
+    Note over API,BS: 验证步长范围、业务类型有效性
+
+    BS->>Cache: 3. 检查业务是否存在
+    Cache->>DB: 4. 查询当前步长配置
+    Note over Cache,DB: SELECT step_size FROM id_segment WHERE business_type=?
+
+    DB->>Cache: 5. 返回当前配置
+    Cache->>BS: 6. 返回业务配置信息
+    BS->>API: 7. 验证结果和影响评估
+
+    alt 预览模式
+        API->>Admin: 8a. 返回变更预览信息
+        Note over API,Admin: 包含影响范围、预估性能变化等
+        Admin->>API: 9a. 确认执行变更
+    end
+
+    API->>BS: 8b. 执行步长变更
+    Note over API,BS: 开启数据库事务
+
+    BS->>DB: 9b. 开启事务
+    Note over BS,DB: BEGIN TRANSACTION
+
+    BS->>DB: 10b. 原子更新步长
+    Note over BS,DB: UPDATE id_segment SET step_size = ? WHERE business_type = ?
+
+    alt 更新成功
+        DB->>BS: 11b. 返回更新结果
+        Note over DB,BS: 影响行数 > 0
+
+        BS->>Cache: 12b. 清理相关缓存
+        Note over BS,Cache: 删除该业务类型的所有缓存条目
+
+        Cache->>BS: 13b. 缓存清理完成
+        
+        BS->>DB: 14b. 提交事务
+        Note over BS,DB: COMMIT TRANSACTION
+
+        DB->>BS: 15b. 事务提交成功
+
+        BS->>Other: 16b. 通知其他服务器实例
+        Note over BS,Other: 发送缓存失效通知
+
+        Other->>BS: 17b. 确认收到通知
+        Note over Other,BS: 其他实例清理本地缓存
+
+        BS->>API: 18b. 变更执行完成
+        API->>Admin: 19b. 返回成功响应
+        Note over API,Admin: 包含变更详情和新配置信息
+
+    else 更新失败
+        DB->>BS: 11c. 返回错误信息
+        BS->>DB: 12c. 回滚事务
+        Note over BS,DB: ROLLBACK TRANSACTION
+        
+        BS->>API: 13c. 返回失败信息
+        API->>Admin: 14c. 返回错误响应
+        Note over API,Admin: 包含失败原因和建议
+    end
+
+    Note over Admin,Other: 变更完成后，系统自动应用新步长:\n- 新的ID生成请求使用新步长\n- 现有缓存逐步过期并更新\n- 所有服务器实例保持一致
+```
+
+### 7.3 批量步长变更流程
+
+```mermaid
+sequenceDiagram
+    participant Admin as 管理员
+    participant API as 管理接口
+    participant BS as 业务服务器
+    participant Cache as 内存缓存
+    participant DB as 数据库
+
+    Admin->>API: 1. POST /admin/step-size/batch-change
+    Note over Admin,API: 批量变更请求: [{businessType, newStepSize}...]
+
+    API->>BS: 2. 批量参数验证
+    Note over API,BS: 验证所有业务类型和步长值
+
+    loop 每个业务类型
+        BS->>Cache: 3. 检查业务配置
+        Cache->>DB: 4. 查询当前步长
+        DB->>Cache: 5. 返回配置信息
+        Cache->>BS: 6. 返回业务状态
+    end
+
+    BS->>API: 7. 批量验证结果
+    
+    alt 预览模式
+        API->>Admin: 8a. 返回批量预览信息
+        Admin->>API: 9a. 确认批量执行
+    end
+
+    API->>BS: 8b. 执行批量变更
+    BS->>DB: 9b. 开启全局事务
+
+    loop 每个业务类型
+        BS->>DB: 10b. 更新步长配置
+        Note over BS,DB: UPDATE id_segment SET step_size = ? WHERE business_type = ?
+        
+        alt 更新失败
+            BS->>DB: 11b. 立即回滚事务
+            BS->>API: 12b. 返回失败信息
+            API->>Admin: 13b. 批量变更失败
+        end
+    end
+
+    BS->>Cache: 14b. 批量清理缓存
+    Note over BS,Cache: 清理所有相关业务的缓存
+
+    BS->>DB: 15b. 提交全局事务
+    DB->>BS: 16b. 事务提交成功
+
+    BS->>API: 17b. 批量变更完成
+    API->>Admin: 18b. 返回批量成功响应
+    Note over API,Admin: 包含每个业务的变更详情
+```
+
+---
+
 ## 总结
 
 以上时序图详细展示了分布式ID生成器系统的各个核心流程：
@@ -791,5 +963,6 @@ sequenceDiagram
 4. **容错切换流程**：说明了奇偶分片服务器的容错机制
 5. **批量ID生成流程**：展示了高并发场景下的批量处理优化
 6. **系统启动初始化流程**：说明了系统启动时的各个初始化步骤
+7. **步长变更流程**：展示了在线安全变更步长的完整流程，包括单个和批量变更
 
-这些时序图涵盖了系统的所有关键场景，可以帮助开发人员和运维人员更好地理解系统的工作原理和交互流程。
+这些时序图涵盖了系统的所有关键场景，包括新增的步长管理功能，可以帮助开发人员和运维人员更好地理解系统的工作原理和交互流程。步长变更功能的加入使得系统具备了更强的运维灵活性和业务适应性。

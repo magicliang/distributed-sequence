@@ -54,6 +54,27 @@ public interface IdSegmentRepository extends JpaRepository<IdSegment, Long> {
                                  @Param("stepSize") Integer stepSize);
 
     /**
+     * 原子性更新最大值和步长（支持步长变更）
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE IdSegment s SET s.maxValue = s.maxValue + :stepSize, s.stepSize = :stepSize, s.updatedTime = CURRENT_TIMESTAMP " +
+           "WHERE s.businessType = :businessType AND s.timeKey = :timeKey AND s.shardType = :shardType")
+    int updateMaxValueAndStepSizeAtomically(@Param("businessType") String businessType,
+                                           @Param("timeKey") String timeKey,
+                                           @Param("shardType") Integer shardType,
+                                           @Param("stepSize") Integer stepSize);
+
+    /**
+     * 获取指定条件下的号段信息（包含步长）
+     */
+    @Query("SELECT s FROM IdSegment s " +
+           "WHERE s.businessType = :businessType AND s.timeKey = :timeKey AND s.shardType = :shardType")
+    Optional<IdSegment> getSegmentInfo(@Param("businessType") String businessType,
+                                      @Param("timeKey") String timeKey,
+                                      @Param("shardType") Integer shardType);
+
+    /**
      * 获取指定条件下的当前最大值
      */
     @Query("SELECT s.maxValue FROM IdSegment s " +
@@ -86,4 +107,14 @@ public interface IdSegmentRepository extends JpaRepository<IdSegment, Long> {
     @Transactional
     @Query("DELETE FROM IdSegment s WHERE s.timeKey < :expiredTimeKey")
     int deleteExpiredSegments(@Param("expiredTimeKey") String expiredTimeKey);
+
+    /**
+     * 根据业务类型查找所有号段
+     */
+    List<IdSegment> findByBusinessType(String businessType);
+
+    /**
+     * 根据业务类型和时间键查找号段
+     */
+    List<IdSegment> findByBusinessTypeAndTimeKey(String businessType, String timeKey);
 }

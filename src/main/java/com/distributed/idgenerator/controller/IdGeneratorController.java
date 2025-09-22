@@ -185,4 +185,55 @@ public class IdGeneratorController {
             return ResponseEntity.status(500).body(result);
         }
     }
+
+    /**
+     * 步长变更管理接口
+     * 
+     * @param businessType 业务类型
+     * @param timeKey 时间键（可选，不指定则影响该业务类型的所有时间键）
+     * @param newStepSize 新的步长值
+     * @param preview 是否仅预览影响范围（不实际执行变更）
+     * @return 变更结果
+     */
+    @PostMapping("/admin/step-size/change")
+    public ResponseEntity<Map<String, Object>> changeStepSize(
+            @RequestParam String businessType,
+            @RequestParam(required = false) String timeKey,
+            @RequestParam Integer newStepSize,
+            @RequestParam(defaultValue = "false") Boolean preview) {
+        
+        try {
+            Map<String, Object> result = idGeneratorService.changeStepSize(
+                    businessType, timeKey, newStepSize, preview);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "步长变更失败: " + e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
+
+    /**
+     * 查询当前步长配置
+     * 
+     * @param businessType 业务类型（可选）
+     * @return 步长配置信息
+     */
+    @GetMapping("/admin/step-size/current")
+    public ResponseEntity<Map<String, Object>> getCurrentStepSize(
+            @RequestParam(required = false) String businessType) {
+        
+        try {
+            Map<String, Object> result = idGeneratorService.getCurrentStepSizeInfo(businessType);
+            return ResponseEntity.ok(result);
+        } catch (Exception e) {
+            Map<String, Object> error = new HashMap<>();
+            error.put("success", false);
+            error.put("message", "查询步长配置失败: " + e.getMessage());
+            error.put("timestamp", System.currentTimeMillis());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(error);
+        }
+    }
 }
