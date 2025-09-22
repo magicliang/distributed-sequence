@@ -1031,6 +1031,273 @@ sequenceDiagram
 
 ---
 
+## 8. 多线程安全刷新机制
+
+### 8.1 ASCII版本
+
+```
+线程1        线程2        线程3        SegmentBuffer    数据库        监控系统
+  |              |              |              |              |              |
+  |--检查阈值---->|              |              |              |              |
+  |              |--检查阈值---->|              |              |              |
+  |              |              |--检查阈值---->|              |              |
+  |              |              |              |--超过阈值---->|              |
+  |              |              |              |              |              |
+  |--尝试CAS设置->|              |              |              |              |
+  |              |--尝试CAS设置->|              |              |              |
+  |              |              |--尝试CAS设置->|              |              |
+  |              |              |              |--CAS成功(线程1)->|              |
+  |              |              |              |--CAS失败(线程2)->|              |
+  |              |              |              |--CAS失败(线程3)->|              |
+  |              |              |              |              |              |
+  |--开始刷新---->|              |              |              |              |
+  |              |--继续使用缓存->|              |              |              |
+  |              |              |--继续使用缓存->|              |              |
+  |              |              |              |              |              |
+  |              |              |              |              |--刷新操作-->|
+  |              |              |              |              |<--新号段----|              |
+  |              |              |              |<--更新缓存--|              |              |
+  |              |              |              |--重置标志位->|              |              |
+  |              |              |              |              |              |
+  |              |              |              |              |              |--监控状态-->|
+  |              |              |              |              |              |<--正常状态--|
+```
+
+### 8.2 Mermaid版本
+
+```mermaid
+sequenceDiagram
+    participant T1 as 线程1
+    participant T2 as 线程2
+    participant T3 as 线程3
+    participant Buffer as SegmentBuffer
+    participant DB as 数据库
+    participant Monitor as 监控系统
+
+    Note over T1,T3: 多个线程同时检测到阈值超限
+    
+    par 并发检查阈值
+        T1->>Buffer: 1a. 检查shouldRefresh()
+        T2->>Buffer: 1b. 检查shouldRefresh()
+        T3->>Buffer: 1c. 检查shouldRefresh()
+    end
+    
+    Buffer->>T1: 2a. 返回true(需要刷新)
+    Buffer->>T2: 2b. 返回true(需要刷新)
+    Buffer->>T3: 2c. 返回true(需要刷新)
+    
+    Note over T1,T3: 所有线程尝试设置刷新标志位
+    
+    par 并发CAS操作
+        T1->>Buffer: 3a. trySetNeedRefresh()
+        T2->>Buffer: 3b. trySetNeedRefresh()
+        T3->>Buffer: 3c. trySetNeedRefresh()
+    end
+    
+    Buffer->>T1: 4a. CAS成功，返回true
+    Buffer->>T2: 4b. CAS失败，返回false
+    Buffer->>T3: 4c. CAS失败，返回false
+    
+    Note over T1: 只有线程1获得刷新权限
+    
+    T1->>DB: 5. 开始刷新操作
+    Note over T1,DB: refreshSegmentAsync()
+    
+    Note over T2,T3: 其他线程继续使用当前缓存
+    
+    alt 刷新成功
+        DB->>T1: 6a. 返回新号段
+        T1->>Buffer: 7a. 更新缓存区间
+        Note over T1,Buffer: updateRange() 自动重置标志位
+        Buffer->>Monitor: 8a. 刷新成功状态
+        
+    else 刷新失败(网络异常)
+        DB--xT1: 6b. 网络超时
+        T1->>Buffer: 7b. 手动重置标志位
+        Note over T1,Buffer: resetNeedRefresh()
+        Buffer->>Monitor: 8b. 刷新失败状态
+        
+        Note over T2,T3: 10秒后其他线程可以检测到超时并重新尝试
+        
+        T2->>Buffer: 9b. 检测到超时，强制重置
+        Buffer->>T2: 10b. 重置成功，获得刷新权限
+        T2->>DB: 11b. 重新尝试刷新
+    end
+    
+    Monitor->>Monitor: 12. 记录刷新状态统计
+    Note over Monitor: 监控指标：成功率、平均耗时、超时次数
+```
+
+## 9. 智能负载均衡流程
+
+### 9.1 ASCII版本
+
+```
+客户端        业务服务器        服务注册中心        数据库        负载分析器
+  |              |              |              |              |
+  |--ID请求----->|              |              |              |
+  |              |--检查服务器状态->|              |              |
+  |              |              |--查询在线服务器->|              |
+  |              |              |<--返回服务器列表--|              |
+  |              |<--服务器状态--|              |              |
+  |              |              |              |              |
+  |              |--查询负载情况-->|              |              |
+  |              |              |              |--查询使用率-->|
+  |              |              |              |<--返回负载数据--|
+  |              |<--负载信息--|              |              |
+  |              |              |              |              |
+  |              |--智能选择分片-->|              |              |
+  |              |              |              |              |--负载分析-->|
+  |              |              |              |              |<--推荐分片--|
+  |              |<--分片类型--|              |              |
+  |              |              |              |              |
+  |              |--获取号段---->|              |              |
+  |              |              |              |--原子更新-->|
+  |              |              |              |<--新号段----|              |
+  |              |<--返回ID------|              |              |
+  |<--响应ID----|              |              |              |
+  |              |              |              |              |
+```
+
+### 9.2 Mermaid版本
+
+```mermaid
+sequenceDiagram
+    participant Client as 客户端
+    participant BS as 业务服务器
+    participant Registry as 服务注册中心
+    participant DB as 数据库
+    participant Analyzer as 负载分析器
+
+    Client->>BS: 1. ID生成请求
+    Note over Client,BS: POST /api/id/generate<br/>{businessType: "order", timeKey: "20241222"}
+    
+    BS->>Registry: 2. 检查服务器状态
+    Note over BS,Registry: 查询奇偶服务器在线情况
+    
+    Registry->>DB: 3. 查询在线服务器
+    Note over Registry,DB: SELECT * FROM server_registry WHERE status = 1
+    
+    DB->>Registry: 4. 返回服务器列表
+    Note over DB,Registry: 偶数服务器: 2台, 奇数服务器: 2台
+    
+    Registry->>BS: 5. 服务器状态信息
+    Note over Registry,BS: evenServerOnline=true, oddServerOnline=true
+    
+    alt 双方服务器都在线
+        BS->>DB: 6a. 查询分片使用情况
+        Note over BS,DB: 查询奇偶分片的maxValue和stepSize
+        
+        DB->>BS: 7a. 返回负载数据
+        Note over DB,BS: 偶数分片: maxValue=150000, stepSize=1000<br/>奇数分片: maxValue=148000, stepSize=1000
+        
+        BS->>Analyzer: 8a. 负载分析
+        Note over BS,Analyzer: 计算使用率: 偶数150%, 奇数148%
+        
+        Analyzer->>BS: 9a. 推荐分片类型
+        Note over Analyzer,BS: 推荐使用奇数分片(负载较低)
+        
+    else 有一方服务器下线
+        BS->>BS: 6b. 启动容错模式
+        Note over BS: 当前服务器接管全部分片
+        
+        BS->>Analyzer: 7b. 容错模式分析
+        Note over BS,Analyzer: 基于哈希值选择分片类型
+        
+        Analyzer->>BS: 8b. 返回分片类型
+        Note over Analyzer,BS: 使用哈希算法保证均匀分布
+    end
+    
+    BS->>DB: 10. 获取指定分片的号段
+    Note over BS,DB: 使用选定的分片类型获取号段
+    
+    DB->>BS: 11. 返回号段数据
+    Note over DB,BS: 原子性更新maxValue并返回新区间
+    
+    BS->>Client: 12. 返回ID响应
+    Note over BS,Client: 包含生成的ID和分片信息
+    
+    Note over Client,Analyzer: 智能负载均衡的优势：<br/>1. 动态选择负载较低的分片<br/>2. 容错模式下保证均匀分布<br/>3. 自动适应服务器状态变化
+```
+
+## 10. 容错恢复与冲突解决流程
+
+### 10.1 Mermaid版本
+
+```mermaid
+sequenceDiagram
+    participant ES as 偶数服务器
+    participant OS as 奇数服务器
+    participant DB as 数据库
+    participant Monitor as 监控系统
+    participant Admin as 管理员
+
+    Note over ES,OS: 服务器恢复后的冲突解决流程
+    
+    OS->>DB: 1. 奇数服务器恢复上线
+    Note over OS,DB: 重新注册并发送心跳
+    
+    DB->>Monitor: 2. 检测到服务器恢复
+    Note over DB,Monitor: server_registry表状态变更
+    
+    Monitor->>ES: 3. 通知偶数服务器清理代理状态
+    Note over Monitor,ES: 触发cleanupProxyShards()
+    
+    ES->>ES: 4. 清理代理分片
+    Note over ES: 删除所有_proxy_缓存
+    
+    par 并发检查冲突
+        ES->>DB: 5a. 检查偶数分片数据
+        OS->>DB: 5b. 检查奇数分片数据
+    end
+    
+    DB->>ES: 6a. 返回偶数分片状态
+    DB->>OS: 6b. 返回奇数分片状态
+    
+    alt 发现数据冲突
+        ES->>Monitor: 7a. 报告冲突情况
+        OS->>Monitor: 7b. 报告冲突情况
+        
+        Monitor->>Admin: 8. 发送冲突告警
+        Note over Monitor,Admin: 邮件/短信/钉钉通知
+        
+        Admin->>Monitor: 9. 触发冲突解决
+        Note over Admin,Monitor: POST /admin/conflicts/resolve
+        
+        Monitor->>DB: 10. 开始冲突解决
+        Note over Monitor,DB: 查找所有业务类型的冲突
+        
+        loop 每个业务类型
+            DB->>Monitor: 11. 查询同一业务的奇偶分片
+            Note over DB,Monitor: 比较maxValue和stepSize
+            
+            alt 存在冲突
+                Monitor->>DB: 12a. 统一使用最大的maxValue
+                Note over Monitor,DB: 更新所有相关分片的maxValue
+                
+                Monitor->>ES: 13a. 清理对应缓存
+                Monitor->>OS: 13b. 清理对应缓存
+                
+            else 无冲突
+                Note over Monitor: 12b. 跳过该业务类型
+            end
+        end
+        
+        Monitor->>Admin: 14. 返回解决结果
+        Note over Monitor,Admin: 包含处理的冲突数量和详情
+        
+    else 无冲突
+        Note over ES,OS: 7c. 正常恢复，无需处理
+    end
+    
+    Note over ES,OS: 恢复正常负载均衡模式
+    
+    ES->>DB: 15. 恢复正常分片处理
+    OS->>DB: 16. 恢复正常分片处理
+    
+    Note over ES,OS: 系统恢复正常，具备完整的高可用性
+```
+
 ## 总结
 
 以上时序图详细展示了分布式ID生成器系统的各个核心流程：
@@ -1042,5 +1309,17 @@ sequenceDiagram
 5. **批量ID生成流程**：展示了高并发场景下的批量处理优化
 6. **系统启动初始化流程**：说明了系统启动时的各个初始化步骤
 7. **步长变更流程**：展示了在线安全变更步长的完整流程，包括单个和批量变更
+8. **多线程安全刷新机制**：展示了CAS+超时恢复的完整机制，解决网络异常问题
+9. **智能负载均衡流程**：说明了基于实际负载的动态分片选择算法
+10. **容错恢复与冲突解决流程**：展示了服务器恢复后的自动冲突检测和解决机制
 
-这些时序图涵盖了系统的所有关键场景，包括新增的步长管理功能，可以帮助开发人员和运维人员更好地理解系统的工作原理和交互流程。步长变更功能的加入使得系统具备了更强的运维灵活性和业务适应性。
+### 技术亮点
+
+这些时序图突出了系统的几个技术亮点：
+
+1. **多线程安全设计**：通过CAS操作和超时恢复机制，完美解决了并发刷新问题
+2. **智能负载均衡**：不再依赖简单的哈希分配，而是基于实际负载情况动态选择
+3. **全面容错设计**：从网络异常到服务器故障，再到数据冲突，都有完整的处理机制
+4. **生产级运维**：支持在线参数调整、实时状态监控、自动故障恢复等功能
+
+这些时序图涵盖了系统的所有关键场景，可以帮助开发人员和运维人员更好地理解系统的工作原理和交互流程。特别是新增的多线程安全和智能负载均衡功能，使得系统具备了更强的稳定性和适应性。
